@@ -48,8 +48,8 @@ encode_iso() {
         return 1
     fi
 
-    # Generate output filename
-    output_filename=$(generate_filename "$sanitized_title" "$year" "$HANDBRAKE_FORMAT")
+    # Generate Plex-friendly output filename (e.g., "The Matrix (1999).mkv")
+    output_filename=$(generate_plex_filename "$sanitized_title" "$year" "$HANDBRAKE_FORMAT")
     output_path="${STAGING_DIR}/${output_filename}"
 
     # Update metadata with MKV path
