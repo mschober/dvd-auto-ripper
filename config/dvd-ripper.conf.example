@@ -130,6 +130,35 @@ RETRY_DELAY="60"
 # NOTIFY_EMAIL_SUBJECT="[DVD Ripper]"
 
 # ============================================================================
+# Pipeline Mode Configuration
+# ============================================================================
+# The 3-stage pipeline separates DVD processing into independent steps:
+#   Stage 1 (udev trigger): Create ISO from DVD, eject immediately
+#   Stage 2 (cron/timer):   Encode ISO to video (15 min intervals)
+#   Stage 3 (cron/timer):   Transfer video to NAS (15 min intervals)
+#
+# Benefits: Drive is freed quickly, encoding happens in background
+
+# Enable pipeline mode (0=monolithic single-process, 1=3-stage pipeline)
+# When enabled, dvd-iso.sh handles disc insertion, dvd-encoder.sh and
+# dvd-transfer.sh run via systemd timers
+PIPELINE_MODE="1"
+
+# Stage-specific lock files (pipeline mode)
+ISO_LOCK_FILE="/var/run/dvd-ripper-iso.lock"
+ENCODER_LOCK_FILE="/var/run/dvd-ripper-encoder.lock"
+TRANSFER_LOCK_FILE="/var/run/dvd-ripper-transfer.lock"
+
+# Cleanup settings (pipeline mode)
+# Delete local MKV after successful NAS transfer
+CLEANUP_MKV_AFTER_TRANSFER="1"
+# Delete ISO after successful NAS transfer (ISO marked .deletable after encode)
+CLEANUP_ISO_AFTER_TRANSFER="1"
+
+# Disk usage threshold (percentage) - skip ripping if disk is too full
+DISK_USAGE_THRESHOLD="80"
+
+# ============================================================================
 # Advanced Options
 # ============================================================================
 

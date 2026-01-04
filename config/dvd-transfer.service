@@ -1,0 +1,21 @@
+[Unit]
+Description=DVD Transfer Service (Pipeline Stage 3)
+Documentation=https://github.com/mschober/dvd-auto-ripper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/dvd-transfer.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dvd-transfer
+
+# Reasonable timeout for transfer (1 hour max)
+TimeoutStartSec=1h
+
+# Nice value - lower priority than interactive processes
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

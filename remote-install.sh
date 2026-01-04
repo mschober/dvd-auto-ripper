@@ -197,17 +197,29 @@ install_scripts() {
         exit 1
     fi
 
-    # Copy main scripts
+    # Copy main scripts (legacy monolithic mode)
     cp "$SCRIPT_DIR/scripts/dvd-ripper.sh" "$INSTALL_BIN/"
     cp "$SCRIPT_DIR/scripts/dvd-utils.sh" "$INSTALL_BIN/"
     cp "$SCRIPT_DIR/scripts/dvd-ripper-stop.sh" "$INSTALL_BIN/"
 
+    # Copy pipeline scripts (3-stage mode)
+    cp "$SCRIPT_DIR/scripts/dvd-iso.sh" "$INSTALL_BIN/"
+    cp "$SCRIPT_DIR/scripts/dvd-encoder.sh" "$INSTALL_BIN/"
+    cp "$SCRIPT_DIR/scripts/dvd-transfer.sh" "$INSTALL_BIN/"
+
     # Set permissions
     chmod 755 "$INSTALL_BIN/dvd-ripper.sh"
     chmod 755 "$INSTALL_BIN/dvd-ripper-stop.sh"
+    chmod 755 "$INSTALL_BIN/dvd-iso.sh"
+    chmod 755 "$INSTALL_BIN/dvd-encoder.sh"
+    chmod 755 "$INSTALL_BIN/dvd-transfer.sh"
     chmod 644 "$INSTALL_BIN/dvd-utils.sh"
 
     print_info "✓ Scripts installed successfully"
+    print_info "  - dvd-ripper.sh (legacy monolithic mode)"
+    print_info "  - dvd-iso.sh (pipeline stage 1: ISO creation)"
+    print_info "  - dvd-encoder.sh (pipeline stage 2: encoding)"
+    print_info "  - dvd-transfer.sh (pipeline stage 3: NAS transfer)"
 }
 
 install_config() {
@@ -324,6 +336,60 @@ install_systemd_service() {
     print_info "✓ Systemd service installed"
 }
 
+install_pipeline_timers() {
+    print_info "Installing pipeline systemd timers..."
+
+    local systemd_dir="/etc/systemd/system"
+
+    # Install encoder service and timer
+    if [[ -f "$SCRIPT_DIR/config/dvd-encoder.service" ]]; then
+        cp "$SCRIPT_DIR/config/dvd-encoder.service" "$systemd_dir/"
+        chmod 644 "$systemd_dir/dvd-encoder.service"
+    else
+        print_warn "dvd-encoder.service not found, skipping"
+    fi
+
+    if [[ -f "$SCRIPT_DIR/config/dvd-encoder.timer" ]]; then
+        cp "$SCRIPT_DIR/config/dvd-encoder.timer" "$systemd_dir/"
+        chmod 644 "$systemd_dir/dvd-encoder.timer"
+    else
+        print_warn "dvd-encoder.timer not found, skipping"
+    fi
+
+    # Install transfer service and timer
+    if [[ -f "$SCRIPT_DIR/config/dvd-transfer.service" ]]; then
+        cp "$SCRIPT_DIR/config/dvd-transfer.service" "$systemd_dir/"
+        chmod 644 "$systemd_dir/dvd-transfer.service"
+    else
+        print_warn "dvd-transfer.service not found, skipping"
+    fi
+
+    if [[ -f "$SCRIPT_DIR/config/dvd-transfer.timer" ]]; then
+        cp "$SCRIPT_DIR/config/dvd-transfer.timer" "$systemd_dir/"
+        chmod 644 "$systemd_dir/dvd-transfer.timer"
+    else
+        print_warn "dvd-transfer.timer not found, skipping"
+    fi
+
+    # Reload systemd
+    systemctl daemon-reload
+
+    # Enable and start timers
+    if [[ -f "$systemd_dir/dvd-encoder.timer" ]]; then
+        systemctl enable dvd-encoder.timer
+        systemctl start dvd-encoder.timer
+        print_info "✓ dvd-encoder.timer enabled and started"
+    fi
+
+    if [[ -f "$systemd_dir/dvd-transfer.timer" ]]; then
+        systemctl enable dvd-transfer.timer
+        systemctl start dvd-transfer.timer
+        print_info "✓ dvd-transfer.timer enabled and started"
+    fi
+
+    print_info "✓ Pipeline timers installed (run every 15 minutes)"
+}
+
 install_udev_rule() {
     print_info "Installing udev rule..."
 
@@ -435,6 +501,38 @@ test_installation() {
         all_good=false
     fi
 
+    # Check pipeline scripts
+    if [[ -x "$INSTALL_BIN/dvd-iso.sh" ]]; then
+        print_info "✓ dvd-iso.sh installed (pipeline stage 1)"
+    else
+        print_warn "⚠ dvd-iso.sh not installed"
+    fi
+
+    if [[ -x "$INSTALL_BIN/dvd-encoder.sh" ]]; then
+        print_info "✓ dvd-encoder.sh installed (pipeline stage 2)"
+    else
+        print_warn "⚠ dvd-encoder.sh not installed"
+    fi
+
+    if [[ -x "$INSTALL_BIN/dvd-transfer.sh" ]]; then
+        print_info "✓ dvd-transfer.sh installed (pipeline stage 3)"
+    else
+        print_warn "⚠ dvd-transfer.sh not installed"
+    fi
+
+    # Check pipeline timers
+    if systemctl is-enabled dvd-encoder.timer &>/dev/null; then
+        print_info "✓ dvd-encoder.timer enabled"
+    else
+        print_warn "⚠ dvd-encoder.timer not enabled"
+    fi
+
+    if systemctl is-enabled dvd-transfer.timer &>/dev/null; then
+        print_info "✓ dvd-transfer.timer enabled"
+    else
+        print_warn "⚠ dvd-transfer.timer not enabled"
+    fi
+
     # Check libdvdcss
     if ldconfig -p | grep -q libdvdcss; then
         print_info "✓ libdvdcss installed (encrypted DVD support)"
@@ -461,7 +559,8 @@ print_next_steps() {
     print_info "1. Edit configuration file:"
     print_info "   sudo nano /etc/dvd-ripper.conf"
     print_info ""
-    print_info "2. Set your NAS details (REQUIRED):"
+    print_info "2. Set your NAS details (for transfer stage):"
+    print_info "   - NAS_ENABLED=1"
     print_info "   - NAS_HOST (IP or hostname)"
     print_info "   - NAS_USER (username)"
     print_info "   - NAS_PATH (destination directory)"
@@ -472,22 +571,26 @@ print_next_steps() {
     print_info "   ssh <nas-user>@<nas-host>  # Test connection"
     print_info ""
     print_info "4. Test manually with a DVD:"
-    print_info "   sudo /usr/local/bin/dvd-ripper.sh /dev/sr0"
+    print_info "   sudo /usr/local/bin/dvd-iso.sh /dev/sr0"
     print_info ""
-    print_info "   Or test the systemd service:"
-    print_info "   sudo systemctl start dvd-ripper@sr0.service"
-    print_info ""
-    print_info "5. Monitor logs:"
+    print_info "5. Monitor the pipeline:"
     print_info "   tail -f /var/log/dvd-ripper.log"
-    print_info "   journalctl -u dvd-ripper@sr0.service -f"
+    print_info "   systemctl list-timers | grep dvd"
     print_info ""
-    print_info "6. Check service status:"
-    print_info "   systemctl status dvd-ripper@sr0.service"
+    print_info "6. Check queue status:"
+    print_info "   ls -la /var/tmp/dvd-rips/.iso-ready-*      # Pending encodes"
+    print_info "   ls -la /var/tmp/dvd-rips/.encoded-ready-*  # Pending transfers"
     print_info ""
-    print_info "AUTOMATIC OPERATION:"
-    print_info "  The systemd service will now start automatically when you"
-    print_info "  insert a DVD. The service runs independently of udev and"
-    print_info "  can handle long-running rips without timeout issues."
+    print_info "PIPELINE MODE (default):"
+    print_info "  Stage 1: Insert DVD -> Create ISO -> Eject (immediate)"
+    print_info "  Stage 2: Encoder timer runs every 15 min -> Encode ISOs"
+    print_info "  Stage 3: Transfer timer runs every 15 min -> Transfer to NAS"
+    print_info ""
+    print_info "  Benefits: Drive is freed quickly, encoding happens in background"
+    print_info ""
+    print_info "MANUAL TRIGGERS:"
+    print_info "   sudo systemctl start dvd-encoder.service   # Encode now"
+    print_info "   sudo systemctl start dvd-transfer.service  # Transfer now"
     print_info ""
 }
 
@@ -524,6 +627,7 @@ main() {
 
     # Install systemd integration
     install_systemd_service
+    install_pipeline_timers
     install_udev_rule
 
     # Test installation

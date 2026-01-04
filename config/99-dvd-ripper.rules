@@ -1,7 +1,12 @@
-# Udev rule for automatic DVD ripping
-# Triggers systemd service when DVD media is inserted
+# Udev rule for automatic DVD ripping (Pipeline Mode)
+# Triggers ISO creation when DVD media is inserted
 # Uses systemd-run to escape udev's cgroup/environment restrictions
+#
+# Pipeline Mode (default):
+#   Stage 1: dvd-iso.sh creates ISO, ejects disc immediately
+#   Stage 2: dvd-encoder.sh runs via timer (every 15 min)
+#   Stage 3: dvd-transfer.sh runs via timer (every 15 min)
 #
 # ID_CDROM_MEDIA=1 ensures we only trigger on insert, not eject
 
-KERNEL=="sr[0-9]*", SUBSYSTEM=="block", ENV{ID_CDROM}=="1", ACTION=="change", ENV{ID_CDROM_MEDIA}=="1", RUN+="/usr/bin/systemd-run --no-block /usr/local/bin/dvd-ripper.sh /dev/%k"
+KERNEL=="sr[0-9]*", SUBSYSTEM=="block", ENV{ID_CDROM}=="1", ACTION=="change", ENV{ID_CDROM_MEDIA}=="1", RUN+="/usr/bin/systemd-run --no-block /usr/local/bin/dvd-iso.sh /dev/%k"
