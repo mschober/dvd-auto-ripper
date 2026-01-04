@@ -486,3 +486,173 @@ init_logging() {
     log_info "==================== DVD Ripper Started ===================="
     return 0
 }
+
+# ============================================================================
+# Pipeline Mode: Stage-Specific Lock Management
+# ============================================================================
+
+# Default lock file paths for pipeline mode
+ISO_LOCK_FILE="${ISO_LOCK_FILE:-/var/run/dvd-ripper-iso.lock}"
+ENCODER_LOCK_FILE="${ENCODER_LOCK_FILE:-/var/run/dvd-ripper-encoder.lock}"
+TRANSFER_LOCK_FILE="${TRANSFER_LOCK_FILE:-/var/run/dvd-ripper-transfer.lock}"
+
+# Acquire stage-specific lock (non-blocking)
+# Usage: acquire_stage_lock STAGE
+# STAGE: iso, encoder, transfer
+# Returns: 0 if acquired, 1 if already locked
+acquire_stage_lock() {
+    local stage="$1"
+    local lock_file
+
+    case "$stage" in
+        iso)      lock_file="$ISO_LOCK_FILE" ;;
+        encoder)  lock_file="$ENCODER_LOCK_FILE" ;;
+        transfer) lock_file="$TRANSFER_LOCK_FILE" ;;
+        *)
+            log_error "Unknown stage: $stage"
+            return 1
+            ;;
+    esac
+
+    if [[ -f "$lock_file" ]]; then
+        local existing_pid=$(cat "$lock_file" 2>/dev/null)
+        if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+            log_debug "Stage $stage already locked by PID $existing_pid"
+            return 1
+        else
+            log_info "Stale $stage lock file found, removing"
+            rm -f "$lock_file"
+        fi
+    fi
+
+    echo "$$" > "$lock_file"
+    log_debug "Acquired $stage lock with PID $$"
+    return 0
+}
+
+# Release stage-specific lock
+# Usage: release_stage_lock STAGE
+release_stage_lock() {
+    local stage="$1"
+    local lock_file
+
+    case "$stage" in
+        iso)      lock_file="$ISO_LOCK_FILE" ;;
+        encoder)  lock_file="$ENCODER_LOCK_FILE" ;;
+        transfer) lock_file="$TRANSFER_LOCK_FILE" ;;
+        *)        return ;;
+    esac
+
+    if [[ -f "$lock_file" ]]; then
+        rm -f "$lock_file"
+        log_debug "Released $stage lock"
+    fi
+}
+
+# ============================================================================
+# Pipeline Mode: JSON State File Management
+# ============================================================================
+
+# Create pipeline state file with JSON metadata
+# Usage: create_pipeline_state STATE TITLE TIMESTAMP METADATA_JSON
+# Returns: path to created state file
+create_pipeline_state() {
+    local state="$1"
+    local title="$2"
+    local timestamp="$3"
+    local metadata="$4"
+    local state_file="${STAGING_DIR}/.${state}-${title}-${timestamp}"
+
+    echo "$metadata" > "$state_file"
+    log_debug "Created pipeline state file: $state_file"
+    echo "$state_file"
+}
+
+# Read metadata from pipeline state file
+# Usage: read_pipeline_state STATE_FILE
+# Returns: JSON metadata or empty object if file doesn't exist
+read_pipeline_state() {
+    local state_file="$1"
+    if [[ -f "$state_file" ]]; then
+        cat "$state_file"
+    else
+        echo "{}"
+    fi
+}
+
+# Find oldest state file of given type (for queue processing)
+# Usage: find_oldest_state STATE
+# Returns: path to oldest state file, or empty if none found
+find_oldest_state() {
+    local state="$1"
+    find "$STAGING_DIR" -maxdepth 1 -name ".${state}-*" -type f -printf '%T@ %p\n' 2>/dev/null | \
+        sort -n | head -1 | cut -d' ' -f2-
+}
+
+# Count pending state files of given type
+# Usage: count_pending_state STATE
+# Returns: count of matching state files
+count_pending_state() {
+    local state="$1"
+    find "$STAGING_DIR" -maxdepth 1 -name ".${state}-*" -type f 2>/dev/null | wc -l
+}
+
+# Transition state: remove old state file, create new one with same metadata
+# Usage: transition_state OLD_STATE_FILE NEW_STATE
+# Returns: path to new state file
+transition_state() {
+    local old_state_file="$1"
+    local new_state="$2"
+
+    # Extract title and timestamp from old state file name
+    local basename=$(basename "$old_state_file")
+    # Format: .STATE-TITLE-TIMESTAMP
+    local title_timestamp="${basename#.*-}"  # Remove .STATE-
+    local title="${title_timestamp%-*}"       # Remove -TIMESTAMP
+    local timestamp="${title_timestamp##*-}"  # Get TIMESTAMP
+
+    # Read existing metadata
+    local metadata=$(read_pipeline_state "$old_state_file")
+
+    # Create new state file
+    local new_state_file=$(create_pipeline_state "$new_state" "$title" "$timestamp" "$metadata")
+
+    # Remove old state file
+    remove_state_file "$old_state_file"
+
+    echo "$new_state_file"
+}
+
+# Parse JSON field from state metadata (simple bash parsing)
+# Usage: parse_json_field METADATA FIELD
+# Returns: field value or empty string
+parse_json_field() {
+    local metadata="$1"
+    local field="$2"
+    echo "$metadata" | grep -oP "\"$field\":\s*\"?\K[^\",$}]+" | head -1
+}
+
+# Build JSON metadata for state files
+# Usage: build_state_metadata TITLE YEAR TIMESTAMP MAIN_TITLE ISO_PATH
+# Returns: JSON string
+build_state_metadata() {
+    local title="$1"
+    local year="$2"
+    local timestamp="$3"
+    local main_title="$4"
+    local iso_path="$5"
+    local mkv_path="${6:-}"
+    local created_at=$(date -Iseconds)
+
+    cat <<EOF
+{
+  "title": "$title",
+  "year": "$year",
+  "timestamp": "$timestamp",
+  "main_title": "$main_title",
+  "iso_path": "$iso_path",
+  "mkv_path": "$mkv_path",
+  "created_at": "$created_at"
+}
+EOF
+}

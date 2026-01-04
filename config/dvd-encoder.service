@@ -1,0 +1,24 @@
+[Unit]
+Description=DVD Encoder Service (Pipeline Stage 2)
+Documentation=https://github.com/mschober/dvd-auto-ripper
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/dvd-encoder.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dvd-encoder
+
+# Resource limits - encoding is CPU intensive
+CPUQuota=80%
+MemoryMax=4G
+
+# Long timeout for encoding (4 hours max)
+TimeoutStartSec=4h
+
+# Nice value - lower priority than interactive processes
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
