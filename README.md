@@ -71,15 +71,15 @@ This method syncs files from your local machine to the remote server, then insta
 # SSH to the server
 ssh <user>@<server>
 
-# Clone the repository
-git clone https://github.com/mschober/dvd-auto-ripper.git ~/dvd-auto-ripper
+# Clone the repository to /opt (standard location for third-party apps)
+sudo git clone https://github.com/mschober/dvd-auto-ripper.git /opt/dvd-auto-ripper
 ```
 
 #### Step 2: Install on Server
 
 ```bash
 # Navigate to cloned directory
-cd ~/dvd-auto-ripper
+cd /opt/dvd-auto-ripper
 
 # Run installation with sudo
 sudo ./remote-install.sh
@@ -98,7 +98,7 @@ The `remote-install.sh` script will:
 If you're already on the server, you can install directly:
 
 ```bash
-cd ~/dvd-auto-ripper
+cd /opt/dvd-auto-ripper
 sudo ./scripts/install.sh
 ```
 

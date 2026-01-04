@@ -19,9 +19,9 @@ This is a DVD auto-ripper utility for Linux servers. It automatically detects DV
 ### Making Changes
 
 1. Edit scripts locally
-2. Commit and push to GitHub: `git push origin master`
-3. SSH to server and pull changes: `ssh <user>@<server> 'cd ~/dvd-auto-ripper && git pull'`
-4. Run install script: `ssh <user>@<server> 'cd ~/dvd-auto-ripper && sudo ./remote-install.sh'`
+2. Commit and push to GitHub: `git push origin main`
+3. SSH to server and pull changes: `ssh <user>@<server> 'cd /opt/dvd-auto-ripper && sudo git pull'`
+4. Run install script: `ssh <user>@<server> 'cd /opt/dvd-auto-ripper && sudo ./remote-install.sh'`
 
 ### Initial Server Setup
 
@@ -31,13 +31,13 @@ ssh <user>@<server>
 
 # Install dependencies (Ubuntu/Debian)
 sudo apt update
-sudo apt install -y git handbrake-cli rsync openssh-client eject
+sudo apt install -y git handbrake-cli rsync openssh-client eject gddrescue ffmpeg
 
-# Clone the repo
-git clone https://github.com/mschober/dvd-auto-ripper.git ~/dvd-auto-ripper
+# Clone the repo to /opt (standard location for third-party apps)
+sudo git clone https://github.com/mschober/dvd-auto-ripper.git /opt/dvd-auto-ripper
 
 # Run installation
-cd ~/dvd-auto-ripper
+cd /opt/dvd-auto-ripper
 sudo ./remote-install.sh
 ```
 
@@ -57,7 +57,7 @@ tail -f /var/log/dvd-ripper.log
 git add -A && git commit -m "Your message" && git push
 
 # On remote server
-ssh <user>@<server> 'cd ~/dvd-auto-ripper && git pull && sudo ./remote-install.sh'
+ssh <user>@<server> 'cd /opt/dvd-auto-ripper && sudo git pull && sudo ./remote-install.sh'
 ```
 
 ## Dependencies
