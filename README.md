@@ -81,9 +81,11 @@ sudo git clone https://github.com/mschober/dvd-auto-ripper.git /opt/dvd-auto-rip
 # Navigate to cloned directory
 cd /opt/dvd-auto-ripper
 
-# Run installation with sudo
-sudo ./remote-install.sh
+# Run installation with sudo (include --install-libdvdcss for commercial DVDs)
+sudo ./remote-install.sh --install-libdvdcss
 ```
+
+> **Important:** The `--install-libdvdcss` flag is required to rip commercial/encrypted DVDs. Without it, most store-bought DVDs will fail to rip.
 
 The `remote-install.sh` script will:
 - Check for required dependencies

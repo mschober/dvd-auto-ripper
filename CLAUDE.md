@@ -36,9 +36,9 @@ sudo apt install -y git handbrake-cli rsync openssh-client eject gddrescue ffmpe
 # Clone the repo to /opt (standard location for third-party apps)
 sudo git clone https://github.com/mschober/dvd-auto-ripper.git /opt/dvd-auto-ripper
 
-# Run installation
+# Run installation (--install-libdvdcss required for commercial DVDs)
 cd /opt/dvd-auto-ripper
-sudo ./remote-install.sh
+sudo ./remote-install.sh --install-libdvdcss
 ```
 
 ### Testing
