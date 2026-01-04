@@ -1,0 +1,148 @@
+# DVD Ripper Configuration File
+# Copy this file to /etc/dvd-ripper.conf and customize for your setup
+
+# ============================================================================
+# Storage Configuration
+# ============================================================================
+
+# Local staging directory for ripping DVDs before transfer to NAS
+STAGING_DIR="/var/tmp/dvd-rips"
+
+# ============================================================================
+# Ripping Workflow Configuration
+# ============================================================================
+
+# Create ISO image from DVD (0=disabled, 1=enabled)
+# When enabled, creates an ISO file from the DVD first using ddrescue
+# Useful for damaged discs or archival purposes
+CREATE_ISO="0"
+
+# Encode video from DVD/ISO (0=disabled, 1=enabled)
+# When enabled, encodes to compressed video file using HandBrake
+# If CREATE_ISO=1, encodes from ISO; otherwise encodes directly from DVD
+ENCODE_VIDEO="1"
+
+# ============================================================================
+# NAS Configuration
+# ============================================================================
+
+# Enable or disable NAS transfer (0=disabled, 1=enabled)
+# When disabled, files remain in STAGING_DIR after ripping
+NAS_ENABLED="0"
+
+# NAS hostname or IP address
+# Example: NAS_HOST="192.168.0.100"
+NAS_HOST=""
+
+# NAS username for file transfer
+# Note: Configure SSH key-based authentication for passwordless access
+# Example: NAS_USER="media"
+NAS_USER=""
+
+# Destination path on NAS for DVD files
+# Example: NAS_PATH="/volume1/media/movies"
+NAS_PATH=""
+
+# Transfer method: "rsync" or "scp"
+# rsync is recommended for resume capability and progress tracking
+NAS_TRANSFER_METHOD="rsync"
+
+# ============================================================================
+# DVD Device Configuration
+# ============================================================================
+
+# DVD drive device path
+# Most systems use /dev/sr0, but check with: lsblk
+DVD_DEVICE="/dev/sr0"
+
+# ============================================================================
+# HandBrake Encoding Settings
+# ============================================================================
+
+# HandBrake preset to use for encoding
+# Common presets:
+#   - "Fast 1080p30" - Quick encode, good quality (recommended)
+#   - "HQ 1080p30 Surround" - Higher quality, slower
+#   - "Super HQ 1080p30 Surround" - Highest quality, very slow
+#   - "Very Fast 1080p30" - Fastest, lower quality
+# List all presets: HandBrakeCLI --preset-list
+HANDBRAKE_PRESET="Fast 1080p30"
+
+# Quality setting (lower = better quality, larger file)
+# Recommended range: 18-22
+# 18 = High quality, ~5-8GB per movie
+# 20 = Good quality, ~3-5GB per movie (recommended)
+# 22 = Acceptable quality, ~2-3GB per movie
+HANDBRAKE_QUALITY="20"
+
+# Output format: "mkv" or "mp4"
+# mkv = Matroska, more flexible, supports more formats
+# mp4 = MP4, better device compatibility
+HANDBRAKE_FORMAT="mkv"
+
+# Minimum acceptable file size in MB
+# Used to verify rip completed successfully (not corrupted/partial)
+MIN_FILE_SIZE_MB="100"
+
+# ============================================================================
+# Logging Configuration
+# ============================================================================
+
+# Log file location
+LOG_FILE="/var/log/dvd-ripper.log"
+
+# Log level: DEBUG, INFO, WARN, ERROR
+# DEBUG = Verbose output for troubleshooting
+# INFO = Normal operation messages (recommended)
+# WARN = Only warnings and errors
+# ERROR = Only errors
+LOG_LEVEL="INFO"
+
+# ============================================================================
+# Lock File Configuration
+# ============================================================================
+
+# Lock/PID file to prevent multiple simultaneous rips
+# /var/run requires root, /tmp works for regular users
+LOCK_FILE="/var/run/dvd-ripper.pid"
+
+# ============================================================================
+# Retry Configuration
+# ============================================================================
+
+# Maximum number of retry attempts for failed operations
+MAX_RETRIES="3"
+
+# Delay between retry attempts (seconds)
+RETRY_DELAY="60"
+
+# ============================================================================
+# Email Notification (Optional - Future Enhancement)
+# ============================================================================
+
+# Enable email notifications (0=disabled, 1=enabled)
+# NOTIFY_EMAIL="0"
+
+# Email address for notifications
+# NOTIFY_EMAIL_TO=""
+
+# Email subject prefix
+# NOTIFY_EMAIL_SUBJECT="[DVD Ripper]"
+
+# ============================================================================
+# Advanced Options
+# ============================================================================
+
+# Device ready timeout (seconds)
+# How long to wait for DVD drive to recognize disc
+DEVICE_TIMEOUT="30"
+
+# Additional HandBrake options (optional)
+# Example: HANDBRAKE_EXTRA_OPTS="--all-audio --all-subtitles"
+# Memory-saving options for systems with limited RAM:
+#   --encoder-preset veryfast    - Use faster, less memory-intensive encoder
+#   --vfr                        - Variable frame rate (reduces memory)
+# Error recovery options for damaged/protected DVDs:
+#   --no-dvdnav                  - Use libdvdread instead of libdvdnav (better error handling)
+# Default: Low memory preset with error recovery for stability
+# HANDBRAKE_EXTRA_OPTS="--encoder-preset veryfast --vfr --no-dvdnav"

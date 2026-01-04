@@ -1,0 +1,29 @@
+[Unit]
+Description=DVD Ripper for %I
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/dvd-ripper.sh /dev/%i
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dvd-ripper
+
+# Security hardening
+# This causes it never to write when enabled
+# PrivateTmp=yes
+NoNewPrivileges=yes
+
+# Resource limits (prevent runaway processes)
+CPUQuota=80%
+MemoryMax=2G
+
+# Timeout - give it plenty of time (4 hours for long DVDs)
+TimeoutStartSec=0
+TimeoutStopSec=30
+
+# Don't restart on failure
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

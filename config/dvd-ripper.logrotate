@@ -1,0 +1,34 @@
+# Logrotate configuration for DVD Ripper
+# Installation: sudo cp dvd-ripper.logrotate /etc/logrotate.d/dvd-ripper
+
+/var/log/dvd-ripper.log {
+    # Rotate daily
+    daily
+
+    # Keep 30 days of logs
+    rotate 30
+
+    # Compress rotated logs (saves disk space)
+    compress
+
+    # Delay compression until next rotation (keeps most recent backup uncompressed)
+    delaycompress
+
+    # Don't error if log file is missing
+    missingok
+
+    # Don't rotate if log is empty
+    notifempty
+
+    # Create new log file with these permissions after rotation
+    create 0640 root adm
+
+    # Use date as suffix for rotated logs
+    dateext
+    dateformat -%Y%m%d
+
+    # Run these commands after rotation (optional)
+    # postrotate
+    #     /usr/bin/systemctl reload dvd-ripper 2>/dev/null || true
+    # endscript
+}

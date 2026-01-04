@@ -1,0 +1,537 @@
+#!/bin/bash
+# Remote Installation Script for DVD Ripper
+# Run this script with sudo on the remote server after deploying files
+# Usage: sudo ./remote-install.sh [--force-config]
+#
+# Options:
+#   --force-config       Overwrite existing configuration file (creates backup)
+#   --install-libdvdcss  Install libdvdcss for encrypted DVD support (Debian/Ubuntu)
+
+# ==============================================================================
+# DEFAULT INSTALLATION PATHS
+# ==============================================================================
+# This script installs the DVD ripper to the following default locations:
+#
+# Executables:
+#   /usr/local/bin/dvd-ripper.sh    - Main orchestration script
+#   /usr/local/bin/dvd-utils.sh     - Shared utility library
+#
+# Configuration:
+#   /etc/dvd-ripper.conf            - Main configuration file
+#   /etc/logrotate.d/dvd-ripper     - Logrotate configuration
+#
+# Runtime files:
+#   /var/tmp/dvd-rips/              - Staging directory for ripped files
+#   /var/log/dvd-ripper.log         - Application log file
+#   /var/run/dvd-ripper.pid         - PID file (while ripping)
+#   /var/run/dvd-ripper.lock        - Lock file (while ripping)
+#
+# Udev integration:
+#   /etc/udev/rules.d/*.rules       - Your existing udev rule (not managed)
+#                                     Should call: /usr/local/bin/dvd-ripper.sh
+# ==============================================================================
+
+set -euo pipefail
+
+# Parse command line arguments
+FORCE_CONFIG=false
+INSTALL_LIBDVDCSS=false
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --force-config)
+            FORCE_CONFIG=true
+            shift
+            ;;
+        --install-libdvdcss)
+            INSTALL_LIBDVDCSS=true
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: sudo ./remote-install.sh [--force-config] [--install-libdvdcss]"
+            exit 1
+            ;;
+    esac
+done
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Installation paths
+INSTALL_BIN="/usr/local/bin"
+INSTALL_CONFIG="/etc"
+INSTALL_LOGROTATE="/etc/logrotate.d"
+
+# Script directory (where this script is located on remote server)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+print_info() {
+    echo -e "${GREEN}[INFO]${NC} $*"
+}
+
+print_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $*"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $*"
+}
+
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        print_error "This script must be run as root (use sudo)"
+        exit 1
+    fi
+}
+
+install_libdvdcss() {
+    print_info "Installing libdvdcss for encrypted DVD support..."
+
+    # Detect distribution
+    if [[ -f /etc/debian_version ]]; then
+        # Debian/Ubuntu
+        print_info "Detected Debian/Ubuntu system"
+
+        apt-get update -qq
+
+        if apt-get install -y libdvd-pkg; then
+            print_info "Running dpkg-reconfigure to build libdvdcss..."
+            # Run non-interactively
+            DEBIAN_FRONTEND=noninteractive dpkg-reconfigure libdvd-pkg
+            print_info "✓ libdvdcss installed successfully"
+        else
+            print_error "Failed to install libdvd-pkg"
+            print_info "You may need to enable contrib/non-free repositories"
+            return 1
+        fi
+    elif [[ -f /etc/redhat-release ]]; then
+        # RHEL/CentOS/Fedora
+        print_info "Detected RHEL/CentOS/Fedora system"
+        print_warn "Please ensure RPM Fusion repository is enabled"
+
+        if yum install -y libdvdcss; then
+            print_info "✓ libdvdcss installed successfully"
+        else
+            print_error "Failed to install libdvdcss"
+            print_info "Enable RPM Fusion: https://rpmfusion.org/Configuration"
+            return 1
+        fi
+    else
+        print_error "Unsupported distribution for automatic libdvdcss installation"
+        print_info "Please install libdvdcss manually for your distribution"
+        return 1
+    fi
+}
+
+check_dependencies() {
+    local missing_deps=()
+
+    print_info "Checking dependencies..."
+
+    # Required dependencies
+    local deps=("HandBrakeCLI" "rsync" "ssh" "eject" "ffmpeg" "ddrescue")
+
+    for cmd in "${deps[@]}"; do
+        if ! command -v "$cmd" &>/dev/null; then
+            missing_deps+=("$cmd")
+        fi
+    done
+
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+        print_error "Missing required dependencies: ${missing_deps[*]}"
+        print_info ""
+        print_info "Install them with:"
+        print_info "  Debian/Ubuntu:"
+        print_info "    sudo apt-get install handbrake-cli rsync openssh-client eject ffmpeg gddrescue"
+        print_info ""
+        print_info "  RHEL/CentOS/Fedora:"
+        print_info "    sudo yum install handbrake-cli rsync openssh-clients eject ffmpeg ddrescue"
+        print_info ""
+        exit 1
+    fi
+
+    # Check for libdvdcss (needed for encrypted DVDs)
+    if ! ldconfig -p | grep -q libdvdcss; then
+        if [[ "$INSTALL_LIBDVDCSS" == "true" ]]; then
+            install_libdvdcss || print_warn "libdvdcss installation failed - continuing anyway"
+            # Refresh library cache
+            ldconfig
+        else
+            print_warn "⚠ libdvdcss not found - encrypted DVDs will not work"
+            print_info ""
+            print_info "To rip commercial/encrypted DVDs, either:"
+            print_info "  1. Re-run with --install-libdvdcss flag:"
+            print_info "     sudo ./remote-install.sh --install-libdvdcss"
+            print_info ""
+            print_info "  2. Or install manually:"
+            print_info "     Debian/Ubuntu:"
+            print_info "       sudo apt-get install libdvd-pkg"
+            print_info "       sudo dpkg-reconfigure libdvd-pkg"
+            print_info ""
+            print_info "     RHEL/CentOS/Fedora:"
+            print_info "       # Enable RPM Fusion repository first"
+            print_info "       sudo yum install libdvdcss"
+            print_info ""
+        fi
+    else
+        print_info "✓ libdvdcss found - encrypted DVD support available"
+    fi
+
+    print_info "✓ All dependencies satisfied"
+}
+
+install_scripts() {
+    print_info "Installing scripts to $INSTALL_BIN..."
+
+    # Check if source scripts exist
+    if [[ ! -f "$SCRIPT_DIR/scripts/dvd-ripper.sh" ]]; then
+        print_error "Source scripts not found in $SCRIPT_DIR/scripts/"
+        print_error "Did you run deploy.sh first?"
+        exit 1
+    fi
+
+    # Copy main scripts
+    cp "$SCRIPT_DIR/scripts/dvd-ripper.sh" "$INSTALL_BIN/"
+    cp "$SCRIPT_DIR/scripts/dvd-utils.sh" "$INSTALL_BIN/"
+    cp "$SCRIPT_DIR/scripts/dvd-ripper-stop.sh" "$INSTALL_BIN/"
+
+    # Set permissions
+    chmod 755 "$INSTALL_BIN/dvd-ripper.sh"
+    chmod 755 "$INSTALL_BIN/dvd-ripper-stop.sh"
+    chmod 644 "$INSTALL_BIN/dvd-utils.sh"
+
+    print_info "✓ Scripts installed successfully"
+}
+
+install_config() {
+    print_info "Installing configuration..."
+
+    local config_file="$INSTALL_CONFIG/dvd-ripper.conf"
+    local config_source="$SCRIPT_DIR/config/dvd-ripper.conf.example"
+
+    if [[ ! -f "$config_source" ]]; then
+        print_error "Configuration source not found: $config_source"
+        exit 1
+    fi
+
+    if [[ -f "$config_file" ]] && [[ "$FORCE_CONFIG" != "true" ]]; then
+        print_warn "Configuration file already exists: $config_file"
+
+        # Create backup
+        local backup_file="${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
+        cp "$config_file" "$backup_file"
+        print_info "✓ Backed up existing configuration to: $backup_file"
+
+        print_warn "Keeping existing configuration (not overwriting)"
+        print_warn "Use --force-config flag to overwrite"
+        return
+    fi
+
+    # If forcing config update and file exists, create backup first
+    if [[ -f "$config_file" ]] && [[ "$FORCE_CONFIG" == "true" ]]; then
+        local backup_file="${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
+        cp "$config_file" "$backup_file"
+        print_info "✓ Backed up existing configuration to: $backup_file"
+        print_warn "Overwriting configuration file (--force-config enabled)"
+    fi
+
+    # Install new config
+    cp "$config_source" "$config_file"
+    chmod 644 "$config_file"
+
+    print_info "✓ Configuration installed to: $config_file"
+    print_warn ""
+    print_warn "*** YOU MUST EDIT THIS FILE TO SET YOUR NAS DETAILS ***"
+    print_warn "    sudo nano $config_file"
+    print_warn ""
+}
+
+install_logrotate() {
+    print_info "Installing logrotate configuration..."
+
+    local logrotate_source="$SCRIPT_DIR/config/dvd-ripper.logrotate"
+
+    if [[ ! -f "$logrotate_source" ]]; then
+        print_error "Logrotate config not found: $logrotate_source"
+        exit 1
+    fi
+
+    cp "$logrotate_source" "$INSTALL_LOGROTATE/dvd-ripper"
+    chmod 644 "$INSTALL_LOGROTATE/dvd-ripper"
+
+    print_info "✓ Logrotate configuration installed"
+}
+
+create_directories() {
+    print_info "Creating required directories..."
+
+    # Create staging directory
+    local staging_dir="/var/tmp/dvd-rips"
+    if [[ ! -d "$staging_dir" ]]; then
+        mkdir -p "$staging_dir"
+        chmod 755 "$staging_dir"
+        print_info "✓ Created staging directory: $staging_dir"
+    else
+        print_info "✓ Staging directory already exists: $staging_dir"
+        # Update permissions on existing directory
+        chmod 755 "$staging_dir"
+        print_info "✓ Updated staging directory permissions to be world-readable"
+    fi
+
+    # Create log file
+    local log_file="/var/log/dvd-ripper.log"
+    if [[ ! -f "$log_file" ]]; then
+        touch "$log_file"
+        chmod 644 "$log_file"
+        print_info "✓ Created log file: $log_file"
+    else
+        print_info "✓ Log file already exists: $log_file"
+    fi
+
+    # Ensure run directory exists (usually does)
+    if [[ ! -d "/var/run" ]]; then
+        mkdir -p "/var/run"
+    fi
+
+    print_info "✓ Directories ready"
+}
+
+install_systemd_service() {
+    print_info "Installing systemd service..."
+
+    local service_source="$SCRIPT_DIR/config/dvd-ripper@.service"
+    local service_dest="/etc/systemd/system/dvd-ripper@.service"
+
+    if [[ ! -f "$service_source" ]]; then
+        print_error "Systemd service file not found: $service_source"
+        exit 1
+    fi
+
+    # Install service file
+    cp "$service_source" "$service_dest"
+    chmod 644 "$service_dest"
+
+    # Reload systemd to recognize new service
+    systemctl daemon-reload
+
+    print_info "✓ Systemd service installed"
+}
+
+install_udev_rule() {
+    print_info "Installing udev rule..."
+
+    local udev_source="$SCRIPT_DIR/config/99-dvd-ripper.rules"
+    local udev_dest="/etc/udev/rules.d/99-dvd-ripper.rules"
+
+    if [[ ! -f "$udev_source" ]]; then
+        print_error "Udev rule file not found: $udev_source"
+        exit 1
+    fi
+
+    # Check for conflicting rules
+    local old_rules=$(grep -l "dvd-ripper.sh" /etc/udev/rules.d/*.rules 2>/dev/null | grep -v "99-dvd-ripper.rules" || true)
+    if [[ -n "$old_rules" ]]; then
+        print_warn "⚠ Found old udev rules that may conflict:"
+        echo "$old_rules" | while read -r rule; do
+            echo "    - $rule"
+        done
+        print_warn ""
+        print_warn "You should remove or disable these old rules to avoid conflicts"
+        print_warn ""
+    fi
+
+    # Install new rule
+    cp "$udev_source" "$udev_dest"
+    chmod 644 "$udev_dest"
+
+    # Reload udev rules and systemd
+    udevadm control --reload-rules
+    udevadm trigger --subsystem-match=block
+    systemctl daemon-reload
+
+    # Settle udev to ensure rules are fully applied
+    udevadm settle --timeout=5
+
+    print_info "✓ Udev rule installed and reloaded"
+}
+
+
+test_installation() {
+    print_info ""
+    print_info "=========================================="
+    print_info "Testing Installation"
+    print_info "=========================================="
+
+    local all_good=true
+
+    # Check if scripts are executable
+    if [[ -x "$INSTALL_BIN/dvd-ripper.sh" ]]; then
+        print_info "✓ dvd-ripper.sh is installed and executable"
+    else
+        print_error "✗ dvd-ripper.sh is not executable"
+        all_good=false
+    fi
+
+    # Check if utils exist
+    if [[ -f "$INSTALL_BIN/dvd-utils.sh" ]]; then
+        print_info "✓ dvd-utils.sh is installed"
+    else
+        print_error "✗ dvd-utils.sh is not installed"
+        all_good=false
+    fi
+
+    # Check if config exists
+    if [[ -f "$INSTALL_CONFIG/dvd-ripper.conf" ]]; then
+        print_info "✓ Configuration file exists"
+    else
+        print_error "✗ Configuration file not found"
+        all_good=false
+    fi
+
+    # Check HandBrake
+    if HandBrakeCLI --version &>/dev/null; then
+        local hb_version=$(HandBrakeCLI --version 2>&1 | head -1)
+        print_info "✓ HandBrake: $hb_version"
+    else
+        print_error "✗ HandBrake not working"
+        all_good=false
+    fi
+
+    # Check DVD device
+    if [[ -e "/dev/sr0" ]]; then
+        print_info "✓ DVD device exists: /dev/sr0"
+    else
+        print_warn "⚠ DVD device /dev/sr0 not found (may need to insert disc)"
+    fi
+
+    # Check staging directory
+    if [[ -d "/var/tmp/dvd-rips" ]]; then
+        print_info "✓ Staging directory exists"
+    else
+        print_error "✗ Staging directory not created"
+        all_good=false
+    fi
+
+    # Check systemd service
+    if [[ -f "/etc/systemd/system/dvd-ripper@.service" ]]; then
+        print_info "✓ Systemd service installed"
+    else
+        print_error "✗ Systemd service not installed"
+        all_good=false
+    fi
+
+    # Check udev rule
+    if [[ -f "/etc/udev/rules.d/99-dvd-ripper.rules" ]]; then
+        print_info "✓ Udev rule installed"
+    else
+        print_error "✗ Udev rule not installed"
+        all_good=false
+    fi
+
+    # Check libdvdcss
+    if ldconfig -p | grep -q libdvdcss; then
+        print_info "✓ libdvdcss installed (encrypted DVD support)"
+    else
+        print_warn "⚠ libdvdcss not installed (encrypted DVDs won't work)"
+    fi
+
+    print_info ""
+    if [[ "$all_good" == "true" ]]; then
+        print_info "✓ All checks passed!"
+    else
+        print_warn "⚠ Some checks failed - review above"
+    fi
+}
+
+print_next_steps() {
+    print_info ""
+    print_info "=========================================="
+    print_info "Installation Complete!"
+    print_info "=========================================="
+    print_info ""
+    print_warn "NEXT STEPS:"
+    print_info ""
+    print_info "1. Edit configuration file:"
+    print_info "   sudo nano /etc/dvd-ripper.conf"
+    print_info ""
+    print_info "2. Set your NAS details (REQUIRED):"
+    print_info "   - NAS_HOST (IP or hostname)"
+    print_info "   - NAS_USER (username)"
+    print_info "   - NAS_PATH (destination directory)"
+    print_info ""
+    print_info "3. Set up SSH key authentication for NAS:"
+    print_info "   ssh-keygen -t rsa -b 4096"
+    print_info "   ssh-copy-id <nas-user>@<nas-host>"
+    print_info "   ssh <nas-user>@<nas-host>  # Test connection"
+    print_info ""
+    print_info "4. Test manually with a DVD:"
+    print_info "   sudo /usr/local/bin/dvd-ripper.sh /dev/sr0"
+    print_info ""
+    print_info "   Or test the systemd service:"
+    print_info "   sudo systemctl start dvd-ripper@sr0.service"
+    print_info ""
+    print_info "5. Monitor logs:"
+    print_info "   tail -f /var/log/dvd-ripper.log"
+    print_info "   journalctl -u dvd-ripper@sr0.service -f"
+    print_info ""
+    print_info "6. Check service status:"
+    print_info "   systemctl status dvd-ripper@sr0.service"
+    print_info ""
+    print_info "AUTOMATIC OPERATION:"
+    print_info "  The systemd service will now start automatically when you"
+    print_info "  insert a DVD. The service runs independently of udev and"
+    print_info "  can handle long-running rips without timeout issues."
+    print_info ""
+}
+
+# ============================================================================
+# Main Installation
+# ============================================================================
+
+main() {
+    print_info "DVD Ripper Remote Installation Script"
+    print_info "======================================"
+    print_info ""
+
+    # Check if running as root
+    check_root
+
+    # Verify we're in the right location
+    if [[ ! -d "$SCRIPT_DIR/scripts" ]] || [[ ! -d "$SCRIPT_DIR/config" ]]; then
+        print_error "Cannot find scripts/ and config/ directories"
+        print_error "Current directory: $SCRIPT_DIR"
+        print_error "Did you run deploy.sh from your local machine first?"
+        exit 1
+    fi
+
+    # Check dependencies
+    check_dependencies
+
+    # Install components
+    install_scripts
+    install_config
+    install_logrotate
+
+    # Create directories
+    create_directories
+
+    # Install systemd integration
+    install_systemd_service
+    install_udev_rule
+
+    # Test installation
+    test_installation
+
+    # Print next steps
+    print_next_steps
+}
+
+# Run main function
+main "$@"
