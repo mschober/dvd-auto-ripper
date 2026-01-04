@@ -1,0 +1,28 @@
+[Unit]
+Description=DVD Ripper Web Dashboard
+Documentation=https://github.com/mschober/dvd-auto-ripper
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/dvd-dashboard.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dvd-dashboard
+
+# Run as root to allow systemctl commands for triggering stages
+User=root
+Group=root
+
+# Environment configuration
+Environment=FLASK_HOST=0.0.0.0
+Environment=FLASK_PORT=5000
+Environment=STAGING_DIR=/var/tmp/dvd-rips
+Environment=LOG_FILE=/var/log/dvd-ripper.log
+Environment=CONFIG_FILE=/etc/dvd-ripper.conf
+Environment=PIPELINE_VERSION_FILE=/usr/local/bin/VERSION
+
+[Install]
+WantedBy=multi-user.target

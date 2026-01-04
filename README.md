@@ -16,6 +16,47 @@ The system is configured for **HandBrake encoding mode**:
 
 To enable ISO creation or NAS transfer, edit `/etc/dvd-ripper.conf`.
 
+## Architecture
+
+The DVD auto-ripper uses a **3-stage pipeline** that decouples disc handling from encoding and transfer:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         DVD AUTO-RIPPER PIPELINE                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌──────────┐     ┌──────────────┐     ┌──────────────┐     ┌───────────┐  │
+│  │   DVD    │     │   STAGE 1    │     │   STAGE 2    │     │  STAGE 3  │  │
+│  │  INSERT  │────▶│  ISO Create  │────▶│   Encoder    │────▶│ Transfer  │  │
+│  │          │     │  (udev)      │     │  (15 min)    │     │ (15 min)  │  │
+│  └──────────┘     └──────────────┘     └──────────────┘     └───────────┘  │
+│                          │                    │                    │        │
+│                          ▼                    ▼                    ▼        │
+│                   ┌────────────┐       ┌────────────┐       ┌──────────┐   │
+│                   │ .iso file  │       │ .mkv file  │       │   NAS    │   │
+│                   │ + eject    │       │ Plex-ready │       │  Plex    │   │
+│                   └────────────┘       └────────────┘       └──────────┘   │
+│                                                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  State Files: .iso-ready-* → .encoding-* → .encoded-ready-* → (cleanup)    │
+│  Lock Files:  /var/run/dvd-ripper-{iso,encoder,transfer}.lock              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Pipeline Benefits
+- **Drive freed immediately**: Disc ejects after ISO creation, ready for next DVD
+- **Background processing**: Encoding happens via timer, doesn't block new rips
+- **Resilient**: Each stage can fail/retry independently
+- **Queue-based**: Multiple ISOs can queue up, processed one at a time
+
+### Stage Details
+
+| Stage | Script | Trigger | Purpose |
+|-------|--------|---------|---------|
+| 1 | `dvd-iso.sh` | udev (disc insert) | Create ISO with ddrescue, eject disc |
+| 2 | `dvd-encoder.sh` | systemd timer (15 min) | Encode ONE ISO to MKV per run |
+| 3 | `dvd-transfer.sh` | systemd timer (15 min) | Transfer ONE MKV to NAS per run |
+
 ## Features
 
 - **Automatic DVD Detection**: udev rule triggers systemd service on disc insertion
