@@ -339,11 +339,193 @@ DASHBOARD_HTML = """
     <div class="footer">
         <p>
             Pipeline v{{ pipeline_version }} | Dashboard v{{ dashboard_version }} |
-            <a href="{{ github_url }}" target="_blank">dvd-auto-ripper</a>
+            <a href="{{ github_url }}" target="_blank">dvd-auto-ripper</a> |
+            <a href="/architecture">Architecture</a>
         </p>
         <p style="margin-top: 4px;">
             Auto-refreshes every 30 seconds. Last update: {{ now }}
         </p>
+    </div>
+</body>
+</html>
+"""
+
+ARCHITECTURE_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DVD Ripper Architecture</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0; padding: 20px; background: #f0f2f5; color: #1a1a1a;
+        }
+        h1 { margin: 0 0 8px 0; }
+        h2 { margin: 24px 0 12px 0; color: #333; }
+        a { color: #3b82f6; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .card {
+            background: white; border-radius: 8px; padding: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 16px;
+        }
+        pre {
+            background: #1e293b; color: #e2e8f0; padding: 20px;
+            border-radius: 8px; overflow-x: auto; font-size: 13px;
+            line-height: 1.4; margin: 0;
+        }
+        table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #eee; }
+        th { background: #f8fafc; font-weight: 600; color: #475569; }
+        .stage-badge {
+            display: inline-block; padding: 4px 12px; border-radius: 12px;
+            font-size: 12px; font-weight: 600;
+        }
+        .stage-1 { background: #fef3c7; color: #92400e; }
+        .stage-2 { background: #dbeafe; color: #1e40af; }
+        .stage-3 { background: #d1fae5; color: #065f46; }
+        .state-file { font-family: monospace; background: #f1f5f9; padding: 2px 6px; border-radius: 4px; }
+        .footer { margin-top: 24px; font-size: 12px; color: #666; text-align: center; }
+        ul { margin: 8px 0; padding-left: 24px; }
+        li { margin: 4px 0; }
+        code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+    </style>
+</head>
+<body>
+    <h1><a href="/">Dashboard</a> / Architecture</h1>
+    <p style="color: #666; margin-top: 0;">Understanding the DVD auto-ripper pipeline</p>
+
+    <div class="card">
+        <h2 style="margin-top: 0;">Pipeline Overview</h2>
+        <pre>
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         DVD AUTO-RIPPER PIPELINE                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌──────────┐     ┌──────────────┐     ┌──────────────┐     ┌───────────┐  │
+│  │   DVD    │     │   STAGE 1    │     │   STAGE 2    │     │  STAGE 3  │  │
+│  │  INSERT  │────▶│  ISO Create  │────▶│   Encoder    │────▶│ Transfer  │  │
+│  │          │     │  (udev)      │     │  (15 min)    │     │ (15 min)  │  │
+│  └──────────┘     └──────────────┘     └──────────────┘     └───────────┘  │
+│                          │                    │                    │        │
+│                          ▼                    ▼                    ▼        │
+│                   ┌────────────┐       ┌────────────┐       ┌──────────┐   │
+│                   │ .iso file  │       │ .mkv file  │       │   NAS    │   │
+│                   │ + eject    │       │ Plex-ready │       │  Plex    │   │
+│                   └────────────┘       └────────────┘       └──────────┘   │
+│                                                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  State Files: .iso-ready-* → .encoding-* → .encoded-ready-* → (cleanup)    │
+│  Lock Files:  /var/run/dvd-ripper-{iso,encoder,transfer}.lock              │
+└─────────────────────────────────────────────────────────────────────────────┘
+        </pre>
+    </div>
+
+    <div class="card">
+        <h2 style="margin-top: 0;">Pipeline Stages</h2>
+        <table>
+            <tr>
+                <th>Stage</th>
+                <th>Script</th>
+                <th>Trigger</th>
+                <th>Purpose</th>
+            </tr>
+            <tr>
+                <td><span class="stage-badge stage-1">Stage 1</span></td>
+                <td><code>dvd-iso.sh</code></td>
+                <td>udev (disc insert)</td>
+                <td>Create ISO with ddrescue, eject disc immediately</td>
+            </tr>
+            <tr>
+                <td><span class="stage-badge stage-2">Stage 2</span></td>
+                <td><code>dvd-encoder.sh</code></td>
+                <td>systemd timer (15 min)</td>
+                <td>Encode ONE ISO to Plex-ready MKV per run</td>
+            </tr>
+            <tr>
+                <td><span class="stage-badge stage-3">Stage 3</span></td>
+                <td><code>dvd-transfer.sh</code></td>
+                <td>systemd timer (15 min)</td>
+                <td>Transfer ONE MKV to NAS per run</td>
+            </tr>
+        </table>
+    </div>
+
+    <div class="card">
+        <h2 style="margin-top: 0;">Benefits of Pipeline Architecture</h2>
+        <ul>
+            <li><strong>Drive freed immediately:</strong> Disc ejects right after ISO creation, ready for next DVD</li>
+            <li><strong>Background processing:</strong> Encoding happens via timer, doesn't block new rips</li>
+            <li><strong>Resilient:</strong> Each stage can fail and retry independently</li>
+            <li><strong>Queue-based:</strong> Multiple ISOs can queue up, processed one at a time</li>
+            <li><strong>Resource efficient:</strong> Only one encode/transfer runs at a time</li>
+        </ul>
+    </div>
+
+    <div class="card">
+        <h2 style="margin-top: 0;">State File Flow</h2>
+        <p>State files track progress through the pipeline. Each file contains JSON metadata.</p>
+        <table>
+            <tr>
+                <th>State</th>
+                <th>Meaning</th>
+                <th>Next Action</th>
+            </tr>
+            <tr>
+                <td><span class="state-file">.iso-creating-*</span></td>
+                <td>ISO creation in progress (ddrescue running)</td>
+                <td>Wait for completion</td>
+            </tr>
+            <tr>
+                <td><span class="state-file">.iso-ready-*</span></td>
+                <td>ISO complete, waiting for encoder</td>
+                <td>Encoder picks up oldest</td>
+            </tr>
+            <tr>
+                <td><span class="state-file">.encoding-*</span></td>
+                <td>HandBrake encoding in progress</td>
+                <td>Wait for completion</td>
+            </tr>
+            <tr>
+                <td><span class="state-file">.encoded-ready-*</span></td>
+                <td>MKV ready, waiting for transfer</td>
+                <td>Transfer picks up oldest</td>
+            </tr>
+            <tr>
+                <td><span class="state-file">.transferring-*</span></td>
+                <td>rsync/scp transfer in progress</td>
+                <td>Wait for completion</td>
+            </tr>
+        </table>
+    </div>
+
+    <div class="card">
+        <h2 style="margin-top: 0;">File Locations</h2>
+        <table>
+            <tr><th>Path</th><th>Purpose</th></tr>
+            <tr><td><code>/var/tmp/dvd-rips/</code></td><td>Staging directory (ISOs, MKVs, state files)</td></tr>
+            <tr><td><code>/var/log/dvd-ripper.log</code></td><td>Application log file</td></tr>
+            <tr><td><code>/etc/dvd-ripper.conf</code></td><td>Configuration file</td></tr>
+            <tr><td><code>/var/run/dvd-ripper-*.lock</code></td><td>Stage lock files (prevent concurrent runs)</td></tr>
+            <tr><td><code>/usr/local/bin/dvd-*.sh</code></td><td>Pipeline scripts</td></tr>
+        </table>
+    </div>
+
+    <div class="card">
+        <h2 style="margin-top: 0;">Manual Commands</h2>
+        <table>
+            <tr><th>Command</th><th>Purpose</th></tr>
+            <tr><td><code>systemctl start dvd-encoder.service</code></td><td>Trigger encoder immediately</td></tr>
+            <tr><td><code>systemctl start dvd-transfer.service</code></td><td>Trigger transfer immediately</td></tr>
+            <tr><td><code>systemctl list-timers | grep dvd</code></td><td>Check timer status</td></tr>
+            <tr><td><code>journalctl -u dvd-encoder -f</code></td><td>Watch encoder logs</td></tr>
+            <tr><td><code>ls /var/tmp/dvd-rips/.*</code></td><td>View state files</td></tr>
+        </table>
+    </div>
+
+    <div class="footer">
+        Pipeline v{{ pipeline_version }} | Dashboard v{{ dashboard_version }} |
+        <a href="{{ github_url }}" target="_blank">dvd-auto-ripper</a>
     </div>
 </body>
 </html>
@@ -480,6 +662,17 @@ def config_page():
     return render_template_string(
         CONFIG_HTML,
         config=read_config(),
+        pipeline_version=get_pipeline_version(),
+        dashboard_version=DASHBOARD_VERSION,
+        github_url=GITHUB_URL
+    )
+
+
+@app.route("/architecture")
+def architecture_page():
+    """Architecture documentation page."""
+    return render_template_string(
+        ARCHITECTURE_HTML,
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
         github_url=GITHUB_URL
