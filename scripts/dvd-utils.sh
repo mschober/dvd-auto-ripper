@@ -124,7 +124,7 @@ sanitize_filename() {
     echo "$input" | sed 's/[^a-zA-Z0-9._-]/_/g' | sed 's/__*/_/g' | sed 's/^_//;s/_$//'
 }
 
-# Generate output filename
+# Generate output filename (internal use with timestamp for dedup)
 # Usage: generate_filename TITLE YEAR EXTENSION
 generate_filename() {
     local title="$1"
@@ -137,6 +137,48 @@ generate_filename() {
         echo "${sanitized_title}-${year}-${timestamp}.${extension}"
     else
         echo "${sanitized_title}-${timestamp}.${extension}"
+    fi
+}
+
+# Clean title for Plex-friendly display (preserve spaces, remove bad chars)
+# Usage: clean_title_for_plex "THE_MATRIX" -> "The Matrix"
+clean_title_for_plex() {
+    local input="$1"
+
+    # Replace underscores with spaces
+    local cleaned="${input//_/ }"
+
+    # Remove characters that are problematic in filenames but keep spaces
+    cleaned=$(echo "$cleaned" | sed 's/[<>:"/\\|?*]//g')
+
+    # Collapse multiple spaces to single space
+    cleaned=$(echo "$cleaned" | sed 's/  */ /g')
+
+    # Trim leading/trailing spaces
+    cleaned=$(echo "$cleaned" | sed 's/^ *//;s/ *$//')
+
+    # Title case (capitalize first letter of each word)
+    # Handle common articles/prepositions that should stay lowercase
+    cleaned=$(echo "$cleaned" | sed 's/.*/\L&/' | sed 's/\b\(.\)/\u\1/g')
+
+    echo "$cleaned"
+}
+
+# Generate Plex-compatible filename
+# Usage: generate_plex_filename TITLE YEAR EXTENSION
+# Output: "The Matrix (1999).mkv" or "The Matrix.mkv" if no year
+generate_plex_filename() {
+    local title="$1"
+    local year="$2"
+    local extension="$3"
+
+    # Clean title for Plex (spaces, proper case)
+    local clean_title=$(clean_title_for_plex "$title")
+
+    if [[ -n "$year" ]] && [[ "$year" =~ ^[0-9]{4}$ ]]; then
+        echo "${clean_title} (${year}).${extension}"
+    else
+        echo "${clean_title}.${extension}"
     fi
 }
 
