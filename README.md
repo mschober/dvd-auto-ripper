@@ -57,6 +57,27 @@ The DVD auto-ripper uses a **3-stage pipeline** that decouples disc handling fro
 | 2 | `dvd-encoder.sh` | systemd timer (15 min) | Encode ONE ISO to MKV per run |
 | 3 | `dvd-transfer.sh` | systemd timer (15 min) | Transfer ONE MKV to NAS per run |
 
+### Web Dashboard
+
+A web UI is available at `http://<server>:5000` for monitoring the pipeline.
+
+```bash
+# Start/stop/restart the dashboard
+sudo systemctl start dvd-dashboard
+sudo systemctl stop dvd-dashboard
+sudo systemctl restart dvd-dashboard
+
+# Check status
+sudo systemctl status dvd-dashboard
+
+# View dashboard logs
+journalctl -u dvd-dashboard -f
+
+# Disable/enable on boot
+sudo systemctl disable dvd-dashboard
+sudo systemctl enable dvd-dashboard
+```
+
 ## Features
 
 - **Automatic DVD Detection**: udev rule triggers systemd service on disc insertion
