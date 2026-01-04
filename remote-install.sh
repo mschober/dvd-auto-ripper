@@ -136,7 +136,7 @@ check_dependencies() {
     print_info "Checking dependencies..."
 
     # Required dependencies
-    local deps=("HandBrakeCLI" "rsync" "ssh" "eject" "ffmpeg" "ddrescue")
+    local deps=("HandBrakeCLI" "rsync" "ssh" "eject" "ffmpeg" "ddrescue" "python3")
 
     for cmd in "${deps[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
@@ -206,6 +206,13 @@ install_scripts() {
     cp "$SCRIPT_DIR/scripts/dvd-iso.sh" "$INSTALL_BIN/"
     cp "$SCRIPT_DIR/scripts/dvd-encoder.sh" "$INSTALL_BIN/"
     cp "$SCRIPT_DIR/scripts/dvd-transfer.sh" "$INSTALL_BIN/"
+
+    # Copy VERSION file for pipeline version tracking
+    if [[ -f "$SCRIPT_DIR/scripts/VERSION" ]]; then
+        cp "$SCRIPT_DIR/scripts/VERSION" "$INSTALL_BIN/VERSION"
+        chmod 644 "$INSTALL_BIN/VERSION"
+        print_info "✓ Pipeline version: $(cat "$INSTALL_BIN/VERSION")"
+    fi
 
     # Set permissions
     chmod 755 "$INSTALL_BIN/dvd-ripper.sh"
@@ -428,6 +435,51 @@ install_udev_rule() {
     print_info "✓ Udev rule installed and reloaded"
 }
 
+install_web_dashboard() {
+    print_info "Installing web dashboard..."
+
+    local dashboard_source="$SCRIPT_DIR/web/dvd-dashboard.py"
+    local service_source="$SCRIPT_DIR/config/dvd-dashboard.service"
+    local systemd_dir="/etc/systemd/system"
+
+    # Check if dashboard exists
+    if [[ ! -f "$dashboard_source" ]]; then
+        print_warn "Web dashboard not found at $dashboard_source, skipping"
+        return
+    fi
+
+    # Check if Flask is installed
+    if ! python3 -c "import flask" 2>/dev/null; then
+        print_info "Installing Flask..."
+        if command -v apt-get &>/dev/null; then
+            apt-get install -y python3-flask >/dev/null 2>&1 || pip3 install flask
+        elif command -v pip3 &>/dev/null; then
+            pip3 install flask
+        else
+            print_warn "Cannot install Flask - please install manually: pip3 install flask"
+            return
+        fi
+    fi
+
+    # Install dashboard script
+    cp "$dashboard_source" "$INSTALL_BIN/dvd-dashboard.py"
+    chmod 755 "$INSTALL_BIN/dvd-dashboard.py"
+
+    # Install systemd service
+    if [[ -f "$service_source" ]]; then
+        cp "$service_source" "$systemd_dir/"
+        chmod 644 "$systemd_dir/dvd-dashboard.service"
+        systemctl daemon-reload
+        systemctl enable dvd-dashboard.service
+        systemctl restart dvd-dashboard.service
+
+        # Get dashboard version
+        local dashboard_version=$(grep -oP 'DASHBOARD_VERSION = "\K[^"]+' "$dashboard_source" 2>/dev/null || echo "unknown")
+        print_info "✓ Web dashboard v${dashboard_version} installed and started"
+    else
+        print_warn "dvd-dashboard.service not found, skipping systemd integration"
+    fi
+}
 
 test_installation() {
     print_info ""
@@ -540,6 +592,14 @@ test_installation() {
         print_warn "⚠ libdvdcss not installed (encrypted DVDs won't work)"
     fi
 
+    # Check web dashboard
+    if systemctl is-active dvd-dashboard.service &>/dev/null; then
+        local ip_addr=$(hostname -I 2>/dev/null | awk '{print $1}')
+        print_info "✓ Web dashboard running at http://${ip_addr:-localhost}:5000"
+    else
+        print_warn "⚠ Web dashboard not running"
+    fi
+
     print_info ""
     if [[ "$all_good" == "true" ]]; then
         print_info "✓ All checks passed!"
@@ -592,6 +652,11 @@ print_next_steps() {
     print_info "   sudo systemctl start dvd-encoder.service   # Encode now"
     print_info "   sudo systemctl start dvd-transfer.service  # Transfer now"
     print_info ""
+    print_info "WEB DASHBOARD:"
+    local ip_addr=$(hostname -I 2>/dev/null | awk '{print $1}')
+    print_info "   http://${ip_addr:-localhost}:5000"
+    print_info "   View queue, logs, disk usage, and trigger stages from browser"
+    print_info ""
 }
 
 # ============================================================================
@@ -629,6 +694,9 @@ main() {
     install_systemd_service
     install_pipeline_timers
     install_udev_rule
+
+    # Install web dashboard (optional but recommended)
+    install_web_dashboard
 
     # Test installation
     test_installation
