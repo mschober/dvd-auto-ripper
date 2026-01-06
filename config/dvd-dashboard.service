@@ -35,17 +35,13 @@ Environment=CONFIG_FILE=/etc/dvd-ripper.conf
 Environment=PIPELINE_VERSION_FILE=/usr/local/bin/VERSION
 
 # Security hardening
-ProtectSystem=strict
+# Note: Using 'full' instead of 'strict' to avoid mount namespace issues
+ProtectSystem=full
 ProtectHome=true
 NoNewPrivileges=yes
-PrivateTmp=true
 PrivateDevices=true
 CapabilityBoundingSet=
-
-# Read-only access to staging directory (dashboard only reads status)
-ReadOnlyPaths=/var/tmp/dvd-rips
-# Write access to log file for dashboard logging
-ReadWritePaths=/var/log/dvd-ripper.log
+# Access control via group membership (dvd-ripper group)
 
 [Install]
 WantedBy=multi-user.target
