@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a DVD auto-ripper utility for Linux servers. It automatically detects DVD insertion via udev, creates an ISO backup using ddrescue, encodes to video using HandBrake, and transfers the output to a NAS/Plex server.
+DVD Auto-Ripper converts physical DVD collections into Plex-ready streaming libraries. It automatically detects DVD insertion via udev, creates an ISO using ddrescue, encodes to MKV using HandBrake, and transfers to a NAS where Plex serves the content.
+
+**Goal**: Get dusty DVDs off the shelf and into a streamable private library.
 
 ## Architecture: 3-Stage Pipeline
 
@@ -40,6 +42,17 @@ The system uses a decoupled pipeline architecture for reliability and efficiency
 | `dvd-transfer.sh` | systemd timer (15 min) | Transfer ONE encoded video to NAS |
 | `dvd-ripper.sh` | manual | Legacy monolithic mode (all-in-one) |
 | `dvd-utils.sh` | sourced | Shared library functions |
+| `dvd-dashboard-ctl.sh` | manual | Dashboard start/stop/restart/status |
+| `dvd-ripper-services-*.sh` | manual | Start/stop all services |
+| `dvd-ripper-trigger-*.sh` | manual | Pause/resume disc detection |
+
+### Web Dashboard
+
+Flask-based dashboard at `http://<server>:5000`:
+- `/` - Main dashboard (queue, disk, logs, triggers)
+- `/status` - Service/timer control (start/stop/enable/disable)
+- `/identify` - Rename DVDs with generic names (preview clips)
+- `/logs`, `/config`, `/architecture` - Reference pages
 
 ### State Files
 
@@ -52,6 +65,7 @@ State files in `/var/tmp/dvd-rips/` track pipeline progress (visible suffix form
 | `TITLE-TS.encoding` | HandBrake encoding in progress |
 | `TITLE-TS.encoded-ready` | Video ready for NAS transfer |
 | `TITLE-TS.transferring` | NAS transfer in progress |
+| `TITLE-TS.transferred` | Complete, on NAS (kept for rename capability) |
 | `*.iso.deletable` | ISO marked for cleanup after encode |
 
 ### Lock Files
