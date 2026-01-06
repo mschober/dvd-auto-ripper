@@ -21,7 +21,7 @@ The system uses a decoupled pipeline architecture for reliability and efficiency
 └─────────────────┘     └─────────────────┘     └─────────────────┘
         │                       │                       │
         ▼                       ▼                       ▼
-  .iso-ready-*           .encoded-ready-*         [Complete]
+  *.iso-ready             *.encoded-ready         [Complete]
   (state file)            (state file)
 ```
 
@@ -43,15 +43,15 @@ The system uses a decoupled pipeline architecture for reliability and efficiency
 
 ### State Files
 
-State files in `/var/tmp/dvd-rips/` track pipeline progress:
+State files in `/var/tmp/dvd-rips/` track pipeline progress (visible suffix format):
 
 | State File | Meaning |
 |------------|---------|
-| `.iso-creating-TITLE-TS` | ISO creation in progress |
-| `.iso-ready-TITLE-TS` | ISO complete, waiting for encoder |
-| `.encoding-TITLE-TS` | HandBrake encoding in progress |
-| `.encoded-ready-TITLE-TS` | Video ready for NAS transfer |
-| `.transferring-TITLE-TS` | NAS transfer in progress |
+| `TITLE-TS.iso-creating` | ISO creation in progress |
+| `TITLE-TS.iso-ready` | ISO complete, waiting for encoder |
+| `TITLE-TS.encoding` | HandBrake encoding in progress |
+| `TITLE-TS.encoded-ready` | Video ready for NAS transfer |
+| `TITLE-TS.transferring` | NAS transfer in progress |
 | `*.iso.deletable` | ISO marked for cleanup after encode |
 
 ### Lock Files
@@ -176,8 +176,8 @@ tail -f /var/log/dvd-ripper.log
 systemctl list-timers | grep dvd
 
 # Check queue status
-ls -la /var/tmp/dvd-rips/.iso-ready-*      # Pending encodes
-ls -la /var/tmp/dvd-rips/.encoded-ready-*  # Pending transfers
+ls -la /var/tmp/dvd-rips/*.iso-ready       # Pending encodes
+ls -la /var/tmp/dvd-rips/*.encoded-ready   # Pending transfers
 ls -la /var/tmp/dvd-rips/*.iso.deletable   # ISOs awaiting cleanup
 ```
 

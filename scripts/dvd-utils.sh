@@ -83,11 +83,12 @@ release_lock() {
 # Create state file to track operation progress
 # Usage: create_state_file STATE TITLE TIMESTAMP
 # STATE: ripping, completed, transferring
+# File format: TITLE-TIMESTAMP.STATE (visible, not hidden)
 create_state_file() {
     local state="$1"
     local title="$2"
     local timestamp="$3"
-    local state_file="${STAGING_DIR}/.${state}-${title}-${timestamp}"
+    local state_file="${STAGING_DIR}/${title}-${timestamp}.${state}"
 
     touch "$state_file"
     log_debug "Created state file: $state_file"
@@ -108,7 +109,7 @@ remove_state_file() {
 # Usage: find_state_files STATE
 find_state_files() {
     local state="$1"
-    find "$STAGING_DIR" -maxdepth 1 -name ".${state}-*" -type f 2>/dev/null
+    find "$STAGING_DIR" -maxdepth 1 -name "*.${state}" -type f 2>/dev/null
 }
 
 # ============================================================================
@@ -272,8 +273,9 @@ get_dvd_info() {
         return 1
     fi
 
-    # Extract title (this is a simplified extraction - may need enhancement)
-    local title=$(echo "$scan_output" | grep -i "title:" | head -1 | sed 's/.*title://i' | xargs)
+    # Extract disc title from libdvdnav output (not track numbers)
+    # Line format: [HH:MM:SS] libdvdnav: DVD Title: THE_MATRIX
+    local title=$(echo "$scan_output" | grep -oP 'libdvdnav: DVD Title: \K.*' | head -1 | xargs)
 
     # Extract main title number (longest title)
     local main_title=$(echo "$scan_output" | grep "^+ title" | \
@@ -283,11 +285,27 @@ get_dvd_info() {
     local duration=$(echo "$scan_output" | grep "duration:" | head -1 | \
         grep -oP 'duration: \K[0-9:]+')
 
-    # Year extraction is tricky - may not be available
+    # Extract year from title if present
     local year=""
 
+    # Pattern 1: Year in parentheses like "(1999)"
+    if [[ "$title" =~ \(([12][0-9]{3})\) ]]; then
+        year="${BASH_REMATCH[1]}"
+    # Pattern 2: Year with underscore like "_1999" at end
+    elif [[ "$title" =~ _([12][0-9]{3})$ ]]; then
+        year="${BASH_REMATCH[1]}"
+    # Pattern 3: Standalone year at end like "MOVIE1999"
+    elif [[ "$title" =~ ([12][0-9]{3})$ ]]; then
+        year="${BASH_REMATCH[1]}"
+    fi
+
+    # Remove year from title to avoid duplication in filename
+    if [[ -n "$year" ]]; then
+        title=$(echo "$title" | sed -E "s/[_ ]?\($year\)//g; s/_$year$//; s/$year$//" | xargs)
+    fi
+
     # Use generic name if title is empty or generic
-    if [[ -z "$title" ]] || [[ "$title" =~ ^(DVD|DVD_VIDEO|DISC)$ ]]; then
+    if [[ -z "$title" ]] || [[ "${title^^}" =~ ^(DVD|DVD_VIDEO|DISC|DISK|VIDEO_TS|DVDVIDEO|MYDVD)$ ]]; then
         title="DVD_$(date +%Y%m%d_%H%M%S)"
     fi
 
@@ -598,12 +616,13 @@ release_stage_lock() {
 # Create pipeline state file with JSON metadata
 # Usage: create_pipeline_state STATE TITLE TIMESTAMP METADATA_JSON
 # Returns: path to created state file
+# File format: TITLE-TIMESTAMP.STATE (visible, not hidden)
 create_pipeline_state() {
     local state="$1"
     local title="$2"
     local timestamp="$3"
     local metadata="$4"
-    local state_file="${STAGING_DIR}/.${state}-${title}-${timestamp}"
+    local state_file="${STAGING_DIR}/${title}-${timestamp}.${state}"
 
     echo "$metadata" > "$state_file"
     log_debug "Created pipeline state file: $state_file"
@@ -627,7 +646,7 @@ read_pipeline_state() {
 # Returns: path to oldest state file, or empty if none found
 find_oldest_state() {
     local state="$1"
-    find "$STAGING_DIR" -maxdepth 1 -name ".${state}-*" -type f -printf '%T@ %p\n' 2>/dev/null | \
+    find "$STAGING_DIR" -maxdepth 1 -name "*.${state}" -type f -printf '%T@ %p\n' 2>/dev/null | \
         sort -n | head -1 | cut -d' ' -f2-
 }
 
@@ -636,7 +655,7 @@ find_oldest_state() {
 # Returns: count of matching state files
 count_pending_state() {
     local state="$1"
-    find "$STAGING_DIR" -maxdepth 1 -name ".${state}-*" -type f 2>/dev/null | wc -l
+    find "$STAGING_DIR" -maxdepth 1 -name "*.${state}" -type f 2>/dev/null | wc -l
 }
 
 # Transition state: remove old state file, create new one with same metadata
@@ -648,10 +667,11 @@ transition_state() {
 
     # Extract title and timestamp from old state file name
     local basename=$(basename "$old_state_file")
-    # Format: .STATE-TITLE-TIMESTAMP
-    local title_timestamp="${basename#.*-}"  # Remove .STATE-
-    local title="${title_timestamp%-*}"       # Remove -TIMESTAMP
-    local timestamp="${title_timestamp##*-}"  # Get TIMESTAMP
+    # Format: TITLE-TIMESTAMP.STATE
+    local old_state="${basename##*.}"         # Get STATE (extension)
+    local name_part="${basename%.${old_state}}"  # Remove .STATE suffix
+    local title="${name_part%-*}"             # Remove -TIMESTAMP
+    local timestamp="${name_part##*-}"        # Get TIMESTAMP
 
     # Read existing metadata
     local metadata=$(read_pipeline_state "$old_state_file")
