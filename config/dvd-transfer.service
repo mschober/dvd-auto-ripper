@@ -30,18 +30,13 @@ Nice=5
 TimeoutStartSec=1h
 
 # Security hardening
-ProtectSystem=strict
+# Note: Using 'true' instead of 'strict' to avoid mount namespace issues
+ProtectSystem=true
 ProtectHome=read-only
 NoNewPrivileges=yes
 PrivateTmp=true
 PrivateDevices=true
 CapabilityBoundingSet=
-
-# Allow write access to staging and log directories
-ReadWritePaths=/var/tmp/dvd-rips /var/log/dvd-ripper.log
-
-# SSH key access for NAS transfer
-BindReadOnlyPaths=/var/lib/dvd-transfer/.ssh
 
 [Install]
 WantedBy=multi-user.target

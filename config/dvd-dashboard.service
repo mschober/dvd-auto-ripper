@@ -35,8 +35,8 @@ Environment=CONFIG_FILE=/etc/dvd-ripper.conf
 Environment=PIPELINE_VERSION_FILE=/usr/local/bin/VERSION
 
 # Security hardening
-# Note: Using 'full' instead of 'strict' to avoid mount namespace issues
-ProtectSystem=full
+# Note: Using 'true' (not 'full') to allow writes to /etc/dvd-ripper.conf
+ProtectSystem=true
 ProtectHome=true
 NoNewPrivileges=yes
 PrivateDevices=true
