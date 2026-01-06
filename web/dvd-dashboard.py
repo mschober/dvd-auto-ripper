@@ -119,45 +119,38 @@ def get_disk_usage():
 def get_recent_logs(lines=50):
     """Read last N lines from log file.
 
-    Also checks rotated log files if the main log is empty/small,
-    which happens after logrotate when processes are still writing
-    to the old (rotated) file handle.
+    Also checks rotated log files in case a process is still writing
+    to the old (rotated) file handle after logrotate runs.
+    Uses whichever log file has the most recent modification time.
     """
     try:
         log_file = LOG_FILE
 
-        # Check if main log is empty or very small (< 100 bytes)
-        # If so, check for recent rotated log files
+        # Get main log mtime
         try:
-            main_size = os.path.getsize(LOG_FILE) if os.path.exists(LOG_FILE) else 0
+            main_mtime = os.path.getmtime(LOG_FILE) if os.path.exists(LOG_FILE) else 0
         except OSError:
-            main_size = 0
+            main_mtime = 0
 
-        if main_size < 100:
-            # Look for rotated log files (logrotate creates these patterns)
-            # Pattern: dvd-ripper.log-YYYYMMDD or dvd-ripper.log.1
-            log_dir = os.path.dirname(LOG_FILE)
-            log_base = os.path.basename(LOG_FILE)
-            rotated_logs = []
+        # Check for rotated log files that may be more recently modified
+        # This happens when encoder is still writing to old file handle
+        log_dir = os.path.dirname(LOG_FILE)
+        log_base = os.path.basename(LOG_FILE)
 
-            try:
-                for f in os.listdir(log_dir):
-                    if f.startswith(log_base) and f != log_base and not f.endswith('.gz'):
-                        full_path = os.path.join(log_dir, f)
-                        try:
-                            mtime = os.path.getmtime(full_path)
-                            size = os.path.getsize(full_path)
-                            if size > 0:
-                                rotated_logs.append((mtime, full_path))
-                        except OSError:
-                            pass
-
-                # Use most recently modified rotated log
-                if rotated_logs:
-                    rotated_logs.sort(reverse=True)
-                    log_file = rotated_logs[0][1]
-            except OSError:
-                pass
+        try:
+            for f in os.listdir(log_dir):
+                if f.startswith(log_base) and f != log_base and not f.endswith('.gz'):
+                    full_path = os.path.join(log_dir, f)
+                    try:
+                        mtime = os.path.getmtime(full_path)
+                        # Use rotated log if it's more recently modified
+                        if mtime > main_mtime:
+                            log_file = full_path
+                            main_mtime = mtime
+                    except OSError:
+                        pass
+        except OSError:
+            pass
 
         result = subprocess.run(
             ["tail", "-n", str(lines), log_file],
