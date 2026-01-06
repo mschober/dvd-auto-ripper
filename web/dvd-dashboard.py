@@ -10,6 +10,7 @@ import os
 import re
 import json
 import glob
+import socket
 import subprocess
 from datetime import datetime
 from flask import Flask, jsonify, render_template_string, request, redirect, url_for, send_file
@@ -581,6 +582,225 @@ def read_config():
     except Exception:
         pass
     return config
+
+
+def read_config_full():
+    """Read and parse config file without masking - for editing."""
+    config = {}
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, _, value = line.partition("=")
+                    key = key.strip()
+                    value = value.strip().strip('"').strip("'")
+                    config[key] = value
+    except Exception:
+        pass
+    return config
+
+
+def write_config(new_settings):
+    """Write config file, preserving comments and structure.
+
+    Args:
+        new_settings: dict of key-value pairs to update
+
+    Returns:
+        tuple: (success: bool, changed_keys: list, message: str)
+    """
+    try:
+        # Read existing file to preserve structure and comments
+        with open(CONFIG_FILE, 'r') as f:
+            lines = f.readlines()
+
+        # Track which keys we've updated and original values
+        old_config = read_config_full()
+        changed_keys = []
+        updated_keys = set()
+
+        # Update values in-place
+        new_lines = []
+        for line in lines:
+            stripped = line.strip()
+
+            # Check if this is a config line (not comment, not empty, has =)
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                key, _, _ = stripped.partition("=")
+                key = key.strip()
+
+                if key in new_settings:
+                    new_value = new_settings[key]
+                    old_value = old_config.get(key, "")
+
+                    # Validate: no newlines allowed in values
+                    if "\n" in str(new_value) or "\r" in str(new_value):
+                        return False, [], f"Invalid value for {key}: newlines not allowed"
+
+                    # Check if value actually changed
+                    if str(new_value) != str(old_value):
+                        changed_keys.append(key)
+
+                    # Write the updated line with proper quoting
+                    new_lines.append(f'{key}="{new_value}"\n')
+                    updated_keys.add(key)
+                else:
+                    new_lines.append(line)
+            else:
+                new_lines.append(line)
+
+        # Add any new keys that weren't in the file
+        for key, value in new_settings.items():
+            if key not in updated_keys:
+                # Validate
+                if "\n" in str(value) or "\r" in str(value):
+                    return False, [], f"Invalid value for {key}: newlines not allowed"
+                new_lines.append(f'{key}="{value}"\n')
+                if key not in old_config or str(value) != str(old_config.get(key, "")):
+                    changed_keys.append(key)
+
+        # Write back to file
+        with open(CONFIG_FILE, 'w') as f:
+            f.writelines(new_lines)
+
+        return True, changed_keys, f"Saved {len(changed_keys)} change(s)"
+
+    except PermissionError:
+        return False, [], "Permission denied - config file requires root access"
+    except Exception as e:
+        return False, [], f"Failed to save config: {str(e)}"
+
+
+def get_restart_recommendations(changed_keys):
+    """Determine which services should be restarted based on changed settings.
+
+    Returns:
+        list of dicts with service info: [{"name": "dvd-encoder", "type": "timer"}, ...]
+    """
+    recommendations = []
+    seen = set()
+
+    # Mapping of config key patterns to affected services
+    patterns = {
+        # Encoder-related settings
+        "HANDBRAKE_": [{"name": "dvd-encoder", "type": "timer"}],
+        "ENABLE_PARALLEL_": [{"name": "dvd-encoder", "type": "timer"}],
+        "MAX_PARALLEL_": [{"name": "dvd-encoder", "type": "timer"}],
+        "ENCODER_LOAD_": [{"name": "dvd-encoder", "type": "timer"}],
+        "PREVIEW_": [{"name": "dvd-encoder", "type": "timer"}],
+        "GENERATE_PREVIEWS": [{"name": "dvd-encoder", "type": "timer"}],
+        "MIN_FILE_SIZE": [{"name": "dvd-encoder", "type": "timer"}],
+
+        # Transfer-related settings
+        "NAS_": [{"name": "dvd-transfer", "type": "timer"}],
+        "TRANSFER_MODE": [{"name": "dvd-transfer", "type": "timer"}],
+        "LOCAL_LIBRARY_": [{"name": "dvd-transfer", "type": "timer"}],
+        "CLEANUP_": [{"name": "dvd-transfer", "type": "timer"}],
+
+        # Cluster settings affect both
+        "CLUSTER_": [
+            {"name": "dvd-encoder", "type": "timer"},
+            {"name": "dvd-transfer", "type": "timer"}
+        ],
+
+        # Core settings affect everything
+        "STAGING_DIR": [
+            {"name": "dvd-encoder", "type": "timer"},
+            {"name": "dvd-transfer", "type": "timer"},
+            {"name": "dvd-dashboard", "type": "service"}
+        ],
+        "LOG_": [
+            {"name": "dvd-encoder", "type": "timer"},
+            {"name": "dvd-transfer", "type": "timer"}
+        ],
+    }
+
+    for key in changed_keys:
+        for pattern, services in patterns.items():
+            if key.startswith(pattern) or key == pattern:
+                for svc in services:
+                    svc_key = f"{svc['name']}:{svc['type']}"
+                    if svc_key not in seen:
+                        recommendations.append(svc)
+                        seen.add(svc_key)
+
+    return recommendations
+
+
+# Config sections for grouped display
+CONFIG_SECTIONS = [
+    {
+        "id": "storage",
+        "title": "Storage & Logging",
+        "keys": ["STAGING_DIR", "LOG_FILE", "LOG_LEVEL", "DISK_USAGE_THRESHOLD"]
+    },
+    {
+        "id": "device",
+        "title": "DVD Device",
+        "keys": ["DVD_DEVICE", "DEVICE_TIMEOUT"]
+    },
+    {
+        "id": "pipeline",
+        "title": "Pipeline Mode",
+        "keys": ["PIPELINE_MODE", "CREATE_ISO", "ENCODE_VIDEO"]
+    },
+    {
+        "id": "handbrake",
+        "title": "HandBrake Encoding",
+        "keys": ["HANDBRAKE_PRESET", "HANDBRAKE_QUALITY", "HANDBRAKE_FORMAT", "HANDBRAKE_EXTRA_OPTS", "MIN_FILE_SIZE_MB"]
+    },
+    {
+        "id": "parallel",
+        "title": "Parallel Encoding",
+        "keys": ["ENABLE_PARALLEL_ENCODING", "MAX_PARALLEL_ENCODERS", "ENCODER_LOAD_THRESHOLD"]
+    },
+    {
+        "id": "preview",
+        "title": "Preview Generation",
+        "keys": ["GENERATE_PREVIEWS", "PREVIEW_DURATION", "PREVIEW_START_PERCENT", "PREVIEW_RESOLUTION"]
+    },
+    {
+        "id": "nas",
+        "title": "NAS Transfer",
+        "keys": ["NAS_ENABLED", "NAS_HOST", "NAS_USER", "NAS_PATH", "NAS_TRANSFER_METHOD", "NAS_FILE_OWNER"]
+    },
+    {
+        "id": "transfer",
+        "title": "Transfer Mode",
+        "keys": ["TRANSFER_MODE", "LOCAL_LIBRARY_PATH"]
+    },
+    {
+        "id": "cluster",
+        "title": "Cluster Mode",
+        "keys": ["CLUSTER_ENABLED", "CLUSTER_NODE_NAME", "CLUSTER_PEERS", "CLUSTER_SSH_USER", "CLUSTER_REMOTE_STAGING"]
+    },
+    {
+        "id": "cleanup",
+        "title": "Cleanup Settings",
+        "keys": ["CLEANUP_MKV_AFTER_TRANSFER", "CLEANUP_ISO_AFTER_TRANSFER", "CLEANUP_PREVIEW_AFTER_TRANSFER"]
+    },
+    {
+        "id": "retry",
+        "title": "Retry & Locks",
+        "keys": ["MAX_RETRIES", "RETRY_DELAY", "LOCK_FILE", "ISO_LOCK_FILE", "ENCODER_LOCK_FILE", "TRANSFER_LOCK_FILE"]
+    }
+]
+
+# Settings that use toggle switches (0/1 values)
+BOOLEAN_SETTINGS = {
+    "NAS_ENABLED", "PIPELINE_MODE", "CREATE_ISO", "ENCODE_VIDEO",
+    "ENABLE_PARALLEL_ENCODING", "GENERATE_PREVIEWS", "CLUSTER_ENABLED",
+    "CLEANUP_MKV_AFTER_TRANSFER", "CLEANUP_ISO_AFTER_TRANSFER", "CLEANUP_PREVIEW_AFTER_TRANSFER"
+}
+
+# Settings with dropdown options
+DROPDOWN_SETTINGS = {
+    "LOG_LEVEL": ["DEBUG", "INFO", "WARN", "ERROR"],
+    "NAS_TRANSFER_METHOD": ["rsync", "scp"],
+    "TRANSFER_MODE": ["remote", "local"],
+    "HANDBRAKE_FORMAT": ["mkv", "mp4"]
+}
 
 
 def trigger_service(stage):
@@ -1528,38 +1748,403 @@ CONFIG_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>DVD Ripper Config</title>
+    <title>Configuration - DVD Ripper</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
+        * { box-sizing: border-box; }
         body {
-            font-family: -apple-system, sans-serif; margin: 0; padding: 20px;
-            background: #f0f2f5;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0; padding: 20px; background: #f0f2f5; color: #1a1a1a;
+            min-height: 100vh;
         }
-        h1 { margin: 0 0 16px 0; }
-        a { color: #3b82f6; text-decoration: none; }
-        a:hover { text-decoration: underline; }
-        .card { background: white; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { text-align: left; padding: 10px; border-bottom: 1px solid #eee; }
-        th { color: #666; font-weight: 600; }
-        td:first-child { font-family: monospace; font-size: 13px; }
-        .footer { margin-top: 16px; font-size: 12px; color: #666; text-align: center; }
+        h1 { margin: 0 0 8px 0; }
+        h1 a { color: #3b82f6; text-decoration: none; }
+        h1 a:hover { text-decoration: underline; }
+        .subtitle { color: #666; margin-bottom: 20px; }
+
+        .section {
+            background: white;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .section-header {
+            padding: 14px 16px;
+            background: #f9fafb;
+            border-bottom: 1px solid #e5e7eb;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            user-select: none;
+        }
+        .section-header:hover { background: #f3f4f6; }
+        .section-title {
+            font-weight: 600;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #374151;
+        }
+        .section-toggle {
+            font-size: 12px;
+            color: #6b7280;
+            transition: transform 0.2s;
+        }
+        .section.collapsed .section-toggle { transform: rotate(-90deg); }
+        .section.collapsed .section-content { display: none; }
+        .section-content { padding: 16px; }
+
+        .setting-row {
+            display: flex;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #f3f4f6;
+        }
+        .setting-row:last-child { border-bottom: none; }
+        .setting-label {
+            flex: 0 0 220px;
+            font-family: monospace;
+            font-size: 13px;
+            color: #4b5563;
+        }
+        .setting-input {
+            flex: 1;
+        }
+        .setting-input input[type="text"],
+        .setting-input input[type="number"],
+        .setting-input select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: inherit;
+        }
+        .setting-input input:focus,
+        .setting-input select:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+        /* Toggle switch for booleans */
+        .toggle-switch {
+            position: relative;
+            width: 50px;
+            height: 26px;
+        }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: #d1d5db;
+            border-radius: 26px;
+            transition: 0.3s;
+        }
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 20px; width: 20px;
+            left: 3px; bottom: 3px;
+            background: white;
+            border-radius: 50%;
+            transition: 0.3s;
+        }
+        .toggle-switch input:checked + .toggle-slider { background: #10b981; }
+        .toggle-switch input:checked + .toggle-slider:before { transform: translateX(24px); }
+        .toggle-label {
+            margin-left: 12px;
+            font-size: 13px;
+            color: #6b7280;
+        }
+
+        .actions {
+            position: sticky;
+            bottom: 0;
+            background: white;
+            padding: 16px 20px;
+            margin: 20px -20px -20px;
+            border-top: 1px solid #e5e7eb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
+        }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .btn-primary { background: #3b82f6; color: white; }
+        .btn-primary:hover { background: #2563eb; }
+        .btn-primary:disabled { background: #93c5fd; cursor: not-allowed; }
+        .btn-secondary { background: #f3f4f6; color: #374151; }
+        .btn-secondary:hover { background: #e5e7eb; }
+
+        .status-msg {
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            display: none;
+        }
+        .status-msg.show { display: block; }
+        .status-msg.success { background: #d1fae5; color: #065f46; }
+        .status-msg.error { background: #fee2e2; color: #991b1b; }
+
+        /* Restart modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.show { display: flex; }
+        .modal {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            max-width: 450px;
+            width: 90%;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.2);
+        }
+        .modal h3 { margin: 0 0 16px 0; }
+        .modal-body { margin-bottom: 20px; }
+        .restart-item {
+            display: flex;
+            align-items: center;
+            padding: 10px 12px;
+            background: #f9fafb;
+            border-radius: 6px;
+            margin-bottom: 8px;
+        }
+        .restart-item input { margin-right: 12px; }
+        .restart-item label { flex: 1; cursor: pointer; }
+        .modal-actions { display: flex; gap: 12px; justify-content: flex-end; }
+
+        .footer {
+            margin-top: 20px;
+            padding-top: 20px;
+            font-size: 12px;
+            color: #666;
+            text-align: center;
+        }
+        .footer a { color: #3b82f6; text-decoration: none; }
     </style>
 </head>
 <body>
     <h1><a href="/">Dashboard</a> / Configuration</h1>
-    <div class="card">
-        <table>
-            <tr><th>Setting</th><th>Value</th></tr>
-            {% for key, value in config.items() %}
-            <tr><td>{{ key }}</td><td>{{ value or '(empty)' }}</td></tr>
-            {% endfor %}
-        </table>
+    <p class="subtitle">Edit settings and save to /etc/dvd-ripper.conf</p>
+
+    <div id="status-msg" class="status-msg"></div>
+
+    <form id="config-form">
+        {% for section in sections %}
+        <div class="section" id="section-{{ section.id }}">
+            <div class="section-header" onclick="toggleSection('{{ section.id }}')">
+                <span class="section-title">{{ section.title }}</span>
+                <span class="section-toggle">▼</span>
+            </div>
+            <div class="section-content">
+                {% for key in section.keys %}
+                <div class="setting-row">
+                    <div class="setting-label">{{ key }}</div>
+                    <div class="setting-input">
+                        {% if key in boolean_settings %}
+                        <label class="toggle-switch">
+                            <input type="checkbox" name="{{ key }}" value="1" {% if config.get(key) == '1' %}checked{% endif %}>
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <span class="toggle-label">{% if config.get(key) == '1' %}Enabled{% else %}Disabled{% endif %}</span>
+                        {% elif key in dropdown_settings %}
+                        <select name="{{ key }}">
+                            {% for opt in dropdown_settings[key] %}
+                            <option value="{{ opt }}" {% if config.get(key) == opt %}selected{% endif %}>{{ opt }}</option>
+                            {% endfor %}
+                        </select>
+                        {% else %}
+                        <input type="text" name="{{ key }}" value="{{ config.get(key, '') }}">
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+    </form>
+
+    <div class="actions">
+        <span id="change-count" style="color: #6b7280; font-size: 13px;"></span>
+        <div>
+            <button type="button" class="btn btn-secondary" onclick="resetForm()">Reset</button>
+            <button type="button" class="btn btn-primary" onclick="saveConfig()" id="save-btn">Save Changes</button>
+        </div>
     </div>
+
+    <!-- Restart Modal -->
+    <div class="modal-overlay" id="restart-modal">
+        <div class="modal">
+            <h3>Restart Services?</h3>
+            <div class="modal-body">
+                <p style="margin: 0 0 16px 0; color: #6b7280;">
+                    The following services may need to be restarted for changes to take effect:
+                </p>
+                <div id="restart-services"></div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeModal()">Skip</button>
+                <button class="btn btn-primary" onclick="restartSelected()">Restart Selected</button>
+            </div>
+        </div>
+    </div>
+
     <div class="footer">
         Pipeline v{{ pipeline_version }} | Dashboard v{{ dashboard_version }} |
-        <a href="{{ github_url }}" target="_blank">dvd-auto-ripper</a>
+        <a href="{{ github_url }}" target="_blank">dvd-auto-ripper</a> |
+        <a href="/">Back to Dashboard</a>
     </div>
+
+    <script>
+        const originalConfig = {{ config | tojson }};
+        let pendingRestarts = [];
+
+        function toggleSection(id) {
+            document.getElementById('section-' + id).classList.toggle('collapsed');
+        }
+
+        function showStatus(msg, type) {
+            const el = document.getElementById('status-msg');
+            el.textContent = msg;
+            el.className = 'status-msg show ' + type;
+            setTimeout(() => el.classList.remove('show'), 5000);
+        }
+
+        function getFormData() {
+            const form = document.getElementById('config-form');
+            const data = {};
+
+            // Get all inputs
+            form.querySelectorAll('input[type="text"], input[type="number"], select').forEach(el => {
+                data[el.name] = el.value;
+            });
+
+            // Get checkboxes (booleans)
+            form.querySelectorAll('input[type="checkbox"]').forEach(el => {
+                data[el.name] = el.checked ? '1' : '0';
+            });
+
+            return data;
+        }
+
+        function resetForm() {
+            const form = document.getElementById('config-form');
+            form.querySelectorAll('input[type="text"], input[type="number"]').forEach(el => {
+                el.value = originalConfig[el.name] || '';
+            });
+            form.querySelectorAll('select').forEach(el => {
+                el.value = originalConfig[el.name] || el.options[0].value;
+            });
+            form.querySelectorAll('input[type="checkbox"]').forEach(el => {
+                el.checked = originalConfig[el.name] === '1';
+                updateToggleLabel(el);
+            });
+            showStatus('Form reset to saved values', 'success');
+        }
+
+        function updateToggleLabel(checkbox) {
+            const label = checkbox.parentElement.nextElementSibling;
+            if (label) label.textContent = checkbox.checked ? 'Enabled' : 'Disabled';
+        }
+
+        // Update toggle labels on change
+        document.querySelectorAll('.toggle-switch input').forEach(el => {
+            el.addEventListener('change', () => updateToggleLabel(el));
+        });
+
+        async function saveConfig() {
+            const btn = document.getElementById('save-btn');
+            btn.disabled = true;
+            btn.textContent = 'Saving...';
+
+            try {
+                const response = await fetch('/api/config/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ settings: getFormData() })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showStatus(result.message, 'success');
+
+                    // Update original config with new values
+                    Object.assign(originalConfig, getFormData());
+
+                    // Show restart modal if needed
+                    if (result.restart_recommendations && result.restart_recommendations.length > 0) {
+                        pendingRestarts = result.restart_recommendations;
+                        showRestartModal(result.restart_recommendations);
+                    }
+                } else {
+                    showStatus(result.message || 'Failed to save', 'error');
+                }
+            } catch (err) {
+                showStatus('Error: ' + err.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Save Changes';
+            }
+        }
+
+        function showRestartModal(services) {
+            const container = document.getElementById('restart-services');
+            container.innerHTML = services.map((svc, i) => `
+                <div class="restart-item">
+                    <input type="checkbox" id="restart-${i}" value="${svc.name}" data-type="${svc.type}" checked>
+                    <label for="restart-${i}">${svc.name}.${svc.type}</label>
+                </div>
+            `).join('');
+            document.getElementById('restart-modal').classList.add('show');
+        }
+
+        function closeModal() {
+            document.getElementById('restart-modal').classList.remove('show');
+        }
+
+        async function restartSelected() {
+            const checkboxes = document.querySelectorAll('#restart-services input:checked');
+            const toRestart = Array.from(checkboxes).map(cb => ({
+                name: cb.value,
+                type: cb.dataset.type
+            }));
+
+            closeModal();
+
+            for (const svc of toRestart) {
+                try {
+                    const endpoint = svc.type === 'timer' ? '/api/timer/' : '/api/service/';
+                    await fetch(endpoint + svc.name, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ action: 'restart' })
+                    });
+                    showStatus(`Restarted ${svc.name}.${svc.type}`, 'success');
+                } catch (err) {
+                    showStatus(`Failed to restart ${svc.name}: ${err.message}`, 'error');
+                }
+            }
+        }
+    </script>
 </body>
 </html>
 """
@@ -2236,10 +2821,106 @@ CLUSTER_HTML = """
     <div class="card">
         <div class="cluster-disabled">
             <h3>Cluster Mode Disabled</h3>
-            <p>Enable cluster mode in your configuration to distribute encoding across multiple machines.</p>
-            <p>Set <code>CLUSTER_ENABLED="1"</code> in <code>/etc/dvd-ripper.conf</code></p>
+            <p style="margin-bottom: 24px;">Enable cluster mode to distribute encoding across multiple machines.</p>
+
+            <div id="enable-form" style="text-align: left; max-width: 400px; margin: 0 auto;">
+                <div style="margin-bottom: 16px;">
+                    <label style="display: block; font-weight: 600; margin-bottom: 6px; color: #374151;">
+                        Node Name (this machine's identifier)
+                    </label>
+                    <input type="text" id="node-name" value="{{ hostname }}"
+                           style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                    <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
+                        Used to identify this node in the cluster
+                    </div>
+                </div>
+
+                <div style="margin-bottom: 16px;">
+                    <label style="display: block; font-weight: 600; margin-bottom: 6px; color: #374151;">
+                        Cluster Peers (optional)
+                    </label>
+                    <input type="text" id="cluster-peers" value=""
+                           placeholder="name:host:port name:host:port"
+                           style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                    <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
+                        Space-separated "name:host:port" entries (e.g., "plex:192.168.1.50:5000")
+                    </div>
+                </div>
+
+                <button onclick="enableCluster()" class="refresh-btn" style="width: 100%; padding: 12px;">
+                    Enable Cluster Mode
+                </button>
+
+                <div id="enable-status" style="margin-top: 12px; display: none;"></div>
+            </div>
+
+            <p style="margin-top: 24px; font-size: 13px;">
+                Or edit the full configuration at <a href="/config" style="color: #3b82f6;">/config</a>
+            </p>
         </div>
     </div>
+
+    <script>
+    async function enableCluster() {
+        const nodeName = document.getElementById('node-name').value.trim();
+        const peers = document.getElementById('cluster-peers').value.trim();
+        const statusEl = document.getElementById('enable-status');
+
+        if (!nodeName) {
+            statusEl.style.display = 'block';
+            statusEl.style.background = '#fee2e2';
+            statusEl.style.color = '#991b1b';
+            statusEl.style.padding = '10px';
+            statusEl.style.borderRadius = '6px';
+            statusEl.textContent = 'Please enter a node name';
+            return;
+        }
+
+        statusEl.style.display = 'block';
+        statusEl.style.background = '#dbeafe';
+        statusEl.style.color = '#1e40af';
+        statusEl.style.padding = '10px';
+        statusEl.style.borderRadius = '6px';
+        statusEl.textContent = 'Saving configuration...';
+
+        try {
+            const settings = {
+                'CLUSTER_ENABLED': '1',
+                'CLUSTER_NODE_NAME': nodeName
+            };
+            if (peers) {
+                settings['CLUSTER_PEERS'] = peers;
+            }
+
+            const response = await fetch('/api/config/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ settings: settings })
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                statusEl.style.background = '#d1fae5';
+                statusEl.style.color = '#065f46';
+                statusEl.innerHTML = 'Cluster mode enabled! <a href="/cluster" style="color: #065f46; font-weight: 600;">Reload page</a> to see cluster status.';
+
+                // Auto-reload after a short delay
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1500);
+            } else {
+                statusEl.style.background = '#fee2e2';
+                statusEl.style.color = '#991b1b';
+                statusEl.textContent = 'Error: ' + result.message;
+            }
+        } catch (err) {
+            statusEl.style.background = '#fee2e2';
+            statusEl.style.color = '#991b1b';
+            statusEl.textContent = 'Error: ' + err.message;
+        }
+    }
+    </script>
     {% else %}
 
     <div class="grid">
@@ -2779,10 +3460,13 @@ def logs_page():
 
 @app.route("/config")
 def config_page():
-    """Configuration view page."""
+    """Configuration edit page with collapsible sections."""
     return render_template_string(
         CONFIG_HTML,
-        config=read_config(),
+        config=read_config_full(),
+        sections=CONFIG_SECTIONS,
+        boolean_settings=BOOLEAN_SETTINGS,
+        dropdown_settings=DROPDOWN_SETTINGS,
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
         github_url=GITHUB_URL
@@ -2916,6 +3600,12 @@ def cluster_page():
     if config["cluster_enabled"]:
         peers = get_all_peer_status()
 
+    # Get hostname for quick-enable form
+    try:
+        hostname = socket.gethostname().split('.')[0]  # Short hostname
+    except Exception:
+        hostname = "node1"
+
     return render_template_string(
         CLUSTER_HTML,
         cluster_enabled=config["cluster_enabled"],
@@ -2923,6 +3613,7 @@ def cluster_page():
         peers=peers,
         distributed_jobs=get_distributed_jobs(),
         received_jobs=get_received_jobs(),
+        hostname=hostname,
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
         github_url=GITHUB_URL
@@ -2967,6 +3658,34 @@ def api_disk():
 def api_config():
     """API: Get configuration."""
     return jsonify(read_config())
+
+
+@app.route("/api/config/save", methods=["POST"])
+def api_config_save():
+    """API: Save configuration changes."""
+    data = request.get_json() or {}
+    settings = data.get("settings", {})
+
+    if not settings:
+        return jsonify({"success": False, "message": "No settings provided"}), 400
+
+    # Write config and get results
+    success, changed_keys, message = write_config(settings)
+
+    if success:
+        # Get restart recommendations for changed settings
+        restart_recs = get_restart_recommendations(changed_keys)
+        return jsonify({
+            "success": True,
+            "message": message,
+            "changed_keys": changed_keys,
+            "restart_recommendations": restart_recs
+        })
+    else:
+        return jsonify({
+            "success": False,
+            "message": message
+        }), 500
 
 
 @app.route("/api/locks")
