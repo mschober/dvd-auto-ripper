@@ -1,6 +1,6 @@
 #!/bin/bash
 # Start/resume DVD ripper services
-# Usage: sudo dvd-ripper-start.sh
+# Usage: sudo dvd-ripper-services-start.sh
 
 set -euo pipefail
 

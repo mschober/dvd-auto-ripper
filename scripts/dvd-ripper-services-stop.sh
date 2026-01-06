@@ -1,6 +1,6 @@
 #!/bin/bash
 # Stop all DVD ripper processes
-# Usage: sudo dvd-ripper-stop.sh
+# Usage: sudo dvd-ripper-services-stop.sh
 
 set -euo pipefail
 
@@ -37,7 +37,7 @@ systemctl reset-failed 2>/dev/null || true
 echo "Done."
 
 # Show remaining processes (should be none)
-remaining=$(ps aux | grep -E 'dvd-ripper|HandBrake' | grep -v grep | grep -v dvd-ripper-stop || true)
+remaining=$(ps aux | grep -E 'dvd-ripper|HandBrake' | grep -v grep | grep -v dvd-ripper-services-stop || true)
 if [[ -n "$remaining" ]]; then
     echo ""
     echo "Warning: Some processes may still be running:"

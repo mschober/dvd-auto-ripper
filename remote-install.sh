@@ -200,8 +200,10 @@ install_scripts() {
     # Copy main scripts (legacy monolithic mode)
     cp "$SCRIPT_DIR/scripts/dvd-ripper.sh" "$INSTALL_BIN/"
     cp "$SCRIPT_DIR/scripts/dvd-utils.sh" "$INSTALL_BIN/"
-    cp "$SCRIPT_DIR/scripts/dvd-ripper-stop.sh" "$INSTALL_BIN/"
-    cp "$SCRIPT_DIR/scripts/dvd-ripper-start.sh" "$INSTALL_BIN/"
+    cp "$SCRIPT_DIR/scripts/dvd-ripper-services-stop.sh" "$INSTALL_BIN/"
+    cp "$SCRIPT_DIR/scripts/dvd-ripper-services-start.sh" "$INSTALL_BIN/"
+    cp "$SCRIPT_DIR/scripts/dvd-ripper-trigger-pause.sh" "$INSTALL_BIN/"
+    cp "$SCRIPT_DIR/scripts/dvd-ripper-trigger-resume.sh" "$INSTALL_BIN/"
 
     # Copy pipeline scripts (3-stage mode)
     cp "$SCRIPT_DIR/scripts/dvd-iso.sh" "$INSTALL_BIN/"
@@ -217,8 +219,10 @@ install_scripts() {
 
     # Set permissions
     chmod 755 "$INSTALL_BIN/dvd-ripper.sh"
-    chmod 755 "$INSTALL_BIN/dvd-ripper-stop.sh"
-    chmod 755 "$INSTALL_BIN/dvd-ripper-start.sh"
+    chmod 755 "$INSTALL_BIN/dvd-ripper-services-stop.sh"
+    chmod 755 "$INSTALL_BIN/dvd-ripper-services-start.sh"
+    chmod 755 "$INSTALL_BIN/dvd-ripper-trigger-pause.sh"
+    chmod 755 "$INSTALL_BIN/dvd-ripper-trigger-resume.sh"
     chmod 755 "$INSTALL_BIN/dvd-iso.sh"
     chmod 755 "$INSTALL_BIN/dvd-encoder.sh"
     chmod 755 "$INSTALL_BIN/dvd-transfer.sh"
