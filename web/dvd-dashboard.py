@@ -22,7 +22,7 @@ STAGING_DIR = os.environ.get("STAGING_DIR", "/var/tmp/dvd-rips")
 LOG_FILE = os.environ.get("LOG_FILE", "/var/log/dvd-ripper.log")
 CONFIG_FILE = os.environ.get("CONFIG_FILE", "/etc/dvd-ripper.conf")
 PIPELINE_VERSION_FILE = os.environ.get("PIPELINE_VERSION_FILE", "/usr/local/bin/VERSION")
-DASHBOARD_VERSION = "1.5.0"
+DASHBOARD_VERSION = "1.6.0"
 GITHUB_URL = "https://github.com/mschober/dvd-auto-ripper"
 
 LOCK_FILES = {
@@ -397,6 +397,164 @@ def get_temperatures():
             pass
     except subprocess.TimeoutExpired:
         result["error"] = "sensors command timed out"
+    except Exception as e:
+        result["error"] = str(e)
+
+    return result
+
+
+# Module-level cache for I/O stats delta calculation
+_io_stats_prev = {}
+_io_stats_time = 0
+
+
+def get_io_stats():
+    """
+    Get disk I/O statistics and device information.
+    Returns device list with throughput and I/O wait percentage.
+    """
+    global _io_stats_prev, _io_stats_time
+    import time
+
+    result = {
+        "devices": [],
+        "iowait_percent": 0.0,
+        "total_read_mb_s": 0.0,
+        "total_write_mb_s": 0.0,
+        "available": False,
+        "error": None
+    }
+
+    current_time = time.time()
+
+    try:
+        # Get I/O wait from /proc/stat
+        try:
+            with open('/proc/stat', 'r') as f:
+                for line in f:
+                    if line.startswith('cpu '):
+                        parts = line.split()
+                        # cpu user nice system idle iowait irq softirq
+                        if len(parts) >= 6:
+                            total = sum(int(p) for p in parts[1:8] if p.isdigit())
+                            iowait = int(parts[5]) if len(parts) > 5 else 0
+                            if total > 0:
+                                result["iowait_percent"] = round((iowait / total) * 100, 1)
+                        break
+        except Exception:
+            pass
+
+        # Get block devices with lsblk
+        try:
+            lsblk_result = subprocess.run(
+                ["lsblk", "-J", "-o", "NAME,SIZE,TYPE,MOUNTPOINT,MODEL,TRAN,ROTA"],
+                capture_output=True, text=True, timeout=5
+            )
+            if lsblk_result.returncode == 0:
+                lsblk_data = json.loads(lsblk_result.stdout)
+                devices_info = {}
+
+                def process_device(dev, parent_tran=None):
+                    """Process a device and its children recursively."""
+                    name = dev.get("name", "")
+                    dev_type = dev.get("type", "")
+
+                    # Only process disks and partitions, skip loops/roms
+                    if dev_type not in ("disk", "part"):
+                        return
+
+                    tran = dev.get("tran") or parent_tran
+                    rota = dev.get("rota")  # 1=rotational (HDD), 0=SSD
+
+                    # Determine device type label
+                    if tran == "usb":
+                        type_label = "usb"
+                    elif tran == "nvme":
+                        type_label = "nvme"
+                    elif rota == "0" or rota == 0 or rota is False:
+                        type_label = "ssd"
+                    elif rota == "1" or rota == 1 or rota is True:
+                        type_label = "hdd"
+                    else:
+                        type_label = "disk"
+
+                    # For disks, store the info
+                    if dev_type == "disk":
+                        devices_info[name] = {
+                            "name": name,
+                            "model": (dev.get("model") or "").strip(),
+                            "size": dev.get("size", ""),
+                            "type": type_label,
+                            "mountpoint": dev.get("mountpoint") or "",
+                            "read_mb_s": 0.0,
+                            "write_mb_s": 0.0
+                        }
+
+                    # Process children (partitions)
+                    for child in dev.get("children", []):
+                        # If partition has mountpoint, update parent disk's mountpoint
+                        if child.get("mountpoint") and name in devices_info:
+                            if not devices_info[name]["mountpoint"]:
+                                devices_info[name]["mountpoint"] = child.get("mountpoint")
+                        process_device(child, tran)
+
+                for dev in lsblk_data.get("blockdevices", []):
+                    process_device(dev)
+
+                # Read /proc/diskstats for I/O counters
+                diskstats = {}
+                try:
+                    with open('/proc/diskstats', 'r') as f:
+                        for line in f:
+                            parts = line.split()
+                            if len(parts) >= 14:
+                                dev_name = parts[2]
+                                # Fields: reads_completed, reads_merged, sectors_read, ms_reading,
+                                #         writes_completed, writes_merged, sectors_written, ms_writing
+                                diskstats[dev_name] = {
+                                    "sectors_read": int(parts[5]),
+                                    "sectors_written": int(parts[9]),
+                                    "time": current_time
+                                }
+                except Exception:
+                    pass
+
+                # Calculate throughput using delta from previous reading
+                time_delta = current_time - _io_stats_time if _io_stats_time > 0 else 1.0
+                if time_delta < 0.1:
+                    time_delta = 0.1  # Minimum delta to avoid division issues
+
+                for dev_name, dev_info in devices_info.items():
+                    if dev_name in diskstats:
+                        current = diskstats[dev_name]
+                        if dev_name in _io_stats_prev and _io_stats_time > 0:
+                            prev = _io_stats_prev[dev_name]
+                            read_sectors = current["sectors_read"] - prev["sectors_read"]
+                            write_sectors = current["sectors_written"] - prev["sectors_written"]
+                            # Sectors are typically 512 bytes
+                            dev_info["read_mb_s"] = round((read_sectors * 512 / 1024 / 1024) / time_delta, 1)
+                            dev_info["write_mb_s"] = round((write_sectors * 512 / 1024 / 1024) / time_delta, 1)
+                            # Clamp negative values (can happen on counter wrap)
+                            if dev_info["read_mb_s"] < 0:
+                                dev_info["read_mb_s"] = 0.0
+                            if dev_info["write_mb_s"] < 0:
+                                dev_info["write_mb_s"] = 0.0
+
+                # Store current stats for next delta calculation
+                _io_stats_prev = diskstats
+                _io_stats_time = current_time
+
+                # Build device list and calculate totals
+                result["devices"] = list(devices_info.values())
+                result["total_read_mb_s"] = round(sum(d["read_mb_s"] for d in result["devices"]), 1)
+                result["total_write_mb_s"] = round(sum(d["write_mb_s"] for d in result["devices"]), 1)
+                result["available"] = True
+
+        except subprocess.TimeoutExpired:
+            result["error"] = "lsblk timed out"
+        except json.JSONDecodeError:
+            result["error"] = "Failed to parse lsblk output"
+
     except Exception as e:
         result["error"] = str(e)
 
@@ -2811,6 +2969,48 @@ CLUSTER_HTML = """
             font-size: 13px;
         }
         .refresh-btn:hover { background: #2563eb; }
+
+        /* I/O Panel styles (light theme) */
+        .io-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 16px;
+            margin-bottom: 16px;
+            text-align: center;
+        }
+        .io-stat {
+            padding: 12px;
+            background: #f9fafb;
+            border-radius: 6px;
+        }
+        .io-value {
+            font-size: 24px;
+            font-weight: 600;
+            color: #1a1a1a;
+            display: block;
+        }
+        .io-label {
+            font-size: 11px;
+            color: #6b7280;
+            text-transform: uppercase;
+            margin-top: 4px;
+        }
+        .io-warn { color: #f59e0b; }
+        .device-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .device-hdd { background: #9ca3af; color: white; }
+        .device-ssd { background: #3b82f6; color: white; }
+        .device-nvme { background: #10b981; color: white; }
+        .device-usb { background: #f59e0b; color: white; }
+        .device-unknown { background: #d1d5db; color: #374151; }
+        .device-model { color: #9ca3af; font-size: 11px; display: block; }
+        .io-unavailable { color: #6b7280; font-style: italic; font-size: 13px; text-align: center; padding: 20px; }
     </style>
 </head>
 <body>
@@ -3074,6 +3274,59 @@ CLUSTER_HTML = """
         {% endif %}
     </div>
 
+    <!-- Storage & I/O -->
+    <div class="card card-full">
+        <h2>Storage & I/O</h2>
+        {% if io.available %}
+        <div class="io-summary">
+            <div class="io-stat">
+                <span class="io-value">{{ "%.1f"|format(io.total_read_mb_s) }}</span>
+                <span class="io-label">MB/s Read</span>
+            </div>
+            <div class="io-stat">
+                <span class="io-value">{{ "%.1f"|format(io.total_write_mb_s) }}</span>
+                <span class="io-label">MB/s Write</span>
+            </div>
+            <div class="io-stat">
+                <span class="io-value {% if io.iowait_percent > 20 %}io-warn{% endif %}">{{ "%.1f"|format(io.iowait_percent) }}%</span>
+                <span class="io-label">I/O Wait</span>
+            </div>
+        </div>
+        {% if io.devices %}
+        <table>
+            <tr>
+                <th>Device</th>
+                <th>Type</th>
+                <th>Size</th>
+                <th>Mount</th>
+                <th>Read</th>
+                <th>Write</th>
+            </tr>
+            {% for dev in io.devices %}
+            <tr>
+                <td>{{ dev.name }}{% if dev.model %}<span class="device-model">{{ dev.model }}</span>{% endif %}</td>
+                <td><span class="device-badge device-{{ dev.type }}">{{ dev.type }}</span></td>
+                <td>{{ dev.size }}</td>
+                <td>{{ dev.mountpoint or '-' }}</td>
+                <td>{{ "%.1f"|format(dev.read_mb_s) }} MB/s</td>
+                <td>{{ "%.1f"|format(dev.write_mb_s) }} MB/s</td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% else %}
+        <p class="io-unavailable">No block devices detected</p>
+        {% endif %}
+        {% else %}
+        <p class="io-unavailable">
+            {% if io.error %}
+            {{ io.error }}
+            {% else %}
+            I/O statistics not available
+            {% endif %}
+        </p>
+        {% endif %}
+    </div>
+
     {% endif %}
 
     <div class="footer">
@@ -3217,6 +3470,49 @@ HEALTH_HTML = """
         .btn-cancel:hover { background: #64748b; }
         .btn-confirm-kill { background: #dc2626; color: white; padding: 8px 16px; }
         .btn-confirm-kill:hover { background: #b91c1c; }
+
+        /* I/O Panel styles */
+        .io-card { grid-column: 1 / -1; }
+        .io-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 16px;
+            margin-bottom: 16px;
+            text-align: center;
+        }
+        .io-stat {
+            padding: 12px;
+            background: #334155;
+            border-radius: 6px;
+        }
+        .io-value {
+            font-size: 24px;
+            font-weight: 600;
+            color: #f1f5f9;
+            display: block;
+        }
+        .io-label {
+            font-size: 11px;
+            color: #94a3b8;
+            text-transform: uppercase;
+            margin-top: 4px;
+        }
+        .io-warn { color: #f59e0b; }
+        .device-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .device-hdd { background: #6b7280; color: white; }
+        .device-ssd { background: #3b82f6; color: white; }
+        .device-nvme { background: #10b981; color: white; }
+        .device-usb { background: #f59e0b; color: white; }
+        .device-unknown { background: #475569; color: white; }
+        .device-model { color: #64748b; font-size: 11px; display: block; }
+        .io-unavailable { color: #64748b; font-style: italic; font-size: 13px; text-align: center; padding: 20px; }
     </style>
 </head>
 <body>
@@ -3295,6 +3591,60 @@ HEALTH_HTML = """
                     Sensors not available
                     {% endif %}
                 </p>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="grid">
+        <div class="card io-card">
+            <h2>Storage & I/O</h2>
+            {% if io.available %}
+            <div class="io-summary">
+                <div class="io-stat">
+                    <span class="io-value">{{ "%.1f"|format(io.total_read_mb_s) }}</span>
+                    <span class="io-label">MB/s Read</span>
+                </div>
+                <div class="io-stat">
+                    <span class="io-value">{{ "%.1f"|format(io.total_write_mb_s) }}</span>
+                    <span class="io-label">MB/s Write</span>
+                </div>
+                <div class="io-stat">
+                    <span class="io-value {% if io.iowait_percent > 20 %}io-warn{% endif %}">{{ "%.1f"|format(io.iowait_percent) }}%</span>
+                    <span class="io-label">I/O Wait</span>
+                </div>
+            </div>
+            {% if io.devices %}
+            <table>
+                <tr>
+                    <th>Device</th>
+                    <th>Type</th>
+                    <th>Size</th>
+                    <th>Mount</th>
+                    <th>Read</th>
+                    <th>Write</th>
+                </tr>
+                {% for dev in io.devices %}
+                <tr>
+                    <td>{{ dev.name }}{% if dev.model %}<span class="device-model">{{ dev.model }}</span>{% endif %}</td>
+                    <td><span class="device-badge device-{{ dev.type }}">{{ dev.type }}</span></td>
+                    <td>{{ dev.size }}</td>
+                    <td>{{ dev.mountpoint or '-' }}</td>
+                    <td>{{ "%.1f"|format(dev.read_mb_s) }} MB/s</td>
+                    <td>{{ "%.1f"|format(dev.write_mb_s) }} MB/s</td>
+                </tr>
+                {% endfor %}
+            </table>
+            {% else %}
+            <p class="io-unavailable">No block devices detected</p>
+            {% endif %}
+            {% else %}
+            <p class="io-unavailable">
+                {% if io.error %}
+                {{ io.error }}
+                {% else %}
+                I/O statistics not available
+                {% endif %}
+            </p>
             {% endif %}
         </div>
     </div>
@@ -3527,6 +3877,7 @@ def health_page():
         memory=get_memory_usage(),
         load=get_load_average(),
         temps=get_temperatures(),
+        io=get_io_stats(),
         processes=get_dvd_processes(),
         message=message,
         message_type=message_type,
@@ -3613,6 +3964,7 @@ def cluster_page():
         peers=peers,
         distributed_jobs=get_distributed_jobs(),
         received_jobs=get_received_jobs(),
+        io=get_io_stats(),
         hostname=hostname,
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
@@ -3707,7 +4059,8 @@ def api_health():
         "cpu": get_cpu_usage(),
         "memory": get_memory_usage(),
         "load": get_load_average(),
-        "temps": get_temperatures()
+        "temps": get_temperatures(),
+        "io": get_io_stats()
     })
 
 

@@ -113,6 +113,27 @@ echo "1.1.0" > web/VERSION
 # DASHBOARD_VERSION = "1.1.0"
 ```
 
+## Incremental Refactoring
+
+We address technical debt incrementally alongside feature work. See [REFACTORING_GOALS.md](./REFACTORING_GOALS.md) for current goals.
+
+### Workflow
+
+1. **Before starting a feature**: Check if any refactoring goals relate to the code you'll touch
+2. **During implementation**: Look for small refactoring opportunities that align with goals
+3. **Scope appropriately**: Refactoring should be ~10-20% of feature effort, not a separate task
+4. **After completion**: Update REFACTORING_GOALS.md if you made progress
+
+### Example
+
+If adding a new health metric and the goal is to extract helpers:
+- Add the new metric function
+- While there, move 1-2 related existing functions to a helper module
+- Update imports in the main file
+- Commit together as part of the feature
+
+This keeps the codebase improving without dedicated refactoring sprints.
+
 ## Code Style
 
 - Bash scripts: Use `set -euo pipefail`

@@ -1,5 +1,9 @@
 # TODO
 
+## Bugs
+
+- [ ] **Cluster page doesn't show active encoding jobs** - Neither machine's `/cluster` page shows jobs that are currently encoding. The "Distributed Jobs" and "Received Jobs" sections appear empty even when encoding is active.
+
 ## Security: Proper User and Permissions Setup
 
 Currently all services run as root, which is not ideal. This worklist tracks the migration to proper user separation with resource limits.
