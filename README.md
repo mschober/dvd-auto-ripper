@@ -101,7 +101,7 @@ sudo apt install libdvd-pkg && sudo dpkg-reconfigure libdvd-pkg
 
 ```bash
 # Clone to /opt (standard location)
-sudo git clone https://github.com/mschober/dvd-auto-ripper.git /opt/dvd-auto-ripper
+sudo git clone https://github.com/<your-username>/dvd-auto-ripper.git /opt/dvd-auto-ripper
 cd /opt/dvd-auto-ripper
 
 # Install (--install-libdvdcss is required for commercial DVDs)
