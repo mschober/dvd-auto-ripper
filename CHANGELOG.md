@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Load-based job distribution - offload to peers when local load is high
 - Remote job handling - encode on peer, return MKV to origin for final transfer
 - New state files for distributed jobs: `*.distributing`, `*.distributed-to-{peer}`
+- Cluster dashboard page (`/cluster`) showing all nodes, capacity, and distributed jobs
 
 ### Configuration
 - `TRANSFER_MODE` - "remote" (rsync to NAS) or "local" (mv to local path)

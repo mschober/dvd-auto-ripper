@@ -1219,6 +1219,7 @@ DASHBOARD_HTML = """
             <a href="/config">Config</a> |
             <a href="/status">Status</a> |
             <a href="/health">Health</a> |
+            <a href="/cluster">Cluster</a> |
             <a href="/identify">
                 Pending ID
                 {% if pending_identification > 0 %}
@@ -2091,6 +2092,329 @@ STATUS_HTML = """
 </html>
 """
 
+CLUSTER_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cluster Status - DVD Ripper</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0; padding: 20px; background: #f0f2f5; color: #1a1a1a;
+            min-height: 100vh;
+        }
+        h1 { margin: 0 0 8px 0; }
+        h1 a { color: #3b82f6; text-decoration: none; }
+        h1 a:hover { text-decoration: underline; }
+        h2 { margin: 0 0 16px 0; font-size: 16px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+        .subtitle { color: #666; margin-bottom: 20px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; margin-bottom: 20px; }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .card-full { grid-column: 1 / -1; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #eee; }
+        th { color: #666; font-weight: 600; font-size: 12px; text-transform: uppercase; }
+        .status-dot {
+            display: inline-block;
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-online { background: #10b981; }
+        .status-offline { background: #ef4444; }
+        .status-unknown { background: #9ca3af; }
+        .status-busy { background: #f59e0b; }
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .badge-online { background: #d1fae5; color: #065f46; }
+        .badge-offline { background: #fee2e2; color: #991b1b; }
+        .badge-local { background: #dbeafe; color: #1e40af; }
+        .badge-remote { background: #fef3c7; color: #92400e; }
+        .badge-available { background: #d1fae5; color: #065f46; }
+        .badge-busy { background: #fef3c7; color: #92400e; }
+        .badge-disabled { background: #f3f4f6; color: #6b7280; }
+        .node-card {
+            background: white;
+            border-radius: 8px;
+            padding: 16px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            border-left: 4px solid #3b82f6;
+        }
+        .node-card.this-node { border-left-color: #10b981; }
+        .node-card.offline { border-left-color: #ef4444; opacity: 0.7; }
+        .node-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .node-name {
+            font-size: 18px;
+            font-weight: 600;
+        }
+        .node-stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-top: 12px;
+        }
+        .stat-box {
+            text-align: center;
+            padding: 8px;
+            background: #f9fafb;
+            border-radius: 6px;
+        }
+        .stat-value {
+            font-size: 20px;
+            font-weight: 700;
+            color: #1a1a1a;
+        }
+        .stat-label {
+            font-size: 11px;
+            color: #6b7280;
+            text-transform: uppercase;
+        }
+        .progress-bar {
+            height: 8px;
+            background: #e5e7eb;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 4px;
+        }
+        .progress-fill {
+            height: 100%;
+            background: #3b82f6;
+            transition: width 0.3s;
+        }
+        .progress-fill.high { background: #ef4444; }
+        .progress-fill.medium { background: #f59e0b; }
+        .meta { font-size: 12px; color: #6b7280; margin-top: 4px; }
+        .cluster-disabled {
+            text-align: center;
+            padding: 40px;
+            color: #6b7280;
+        }
+        .cluster-disabled h3 { color: #1a1a1a; margin-bottom: 12px; }
+        .cluster-disabled code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+        .footer {
+            margin-top: 20px;
+            font-size: 12px;
+            color: #666;
+            text-align: center;
+        }
+        .footer a { color: #3b82f6; text-decoration: none; }
+        .empty-state { text-align: center; padding: 20px; color: #6b7280; }
+        .refresh-btn {
+            padding: 8px 16px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .refresh-btn:hover { background: #2563eb; }
+    </style>
+</head>
+<body>
+    <h1><a href="/">Dashboard</a> / Cluster Status</h1>
+    <p class="subtitle">Distributed encoding across multiple machines</p>
+
+    {% if not cluster_enabled %}
+    <div class="card">
+        <div class="cluster-disabled">
+            <h3>Cluster Mode Disabled</h3>
+            <p>Enable cluster mode in your configuration to distribute encoding across multiple machines.</p>
+            <p>Set <code>CLUSTER_ENABLED="1"</code> in <code>/etc/dvd-ripper.conf</code></p>
+        </div>
+    </div>
+    {% else %}
+
+    <div class="grid">
+        <!-- This Node -->
+        <div class="node-card this-node">
+            <div class="node-header">
+                <span class="node-name">
+                    <span class="status-dot status-online"></span>
+                    {{ this_node.node_name or "This Node" }} (local)
+                </span>
+                <span class="badge badge-{{ 'local' if this_node.transfer_mode == 'local' else 'remote' }}">
+                    {{ this_node.transfer_mode }} transfer
+                </span>
+            </div>
+            <div class="node-stats">
+                <div class="stat-box">
+                    <div class="stat-value">{{ "%.1f"|format(this_node.capacity.load_1m) }}</div>
+                    <div class="stat-label">Load (1m)</div>
+                    <div class="progress-bar">
+                        <div class="progress-fill {% if this_node.capacity.load_1m > this_node.capacity.max_load %}high{% elif this_node.capacity.load_1m > this_node.capacity.max_load * 0.7 %}medium{% endif %}"
+                             style="width: {{ [100, (this_node.capacity.load_1m / this_node.capacity.max_load * 100)|int]|min }}%"></div>
+                    </div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value">{{ this_node.capacity.slots_free }}/{{ this_node.capacity.slots_total }}</div>
+                    <div class="stat-label">Slots Free</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value">{{ this_node.capacity.queue_depth }}</div>
+                    <div class="stat-label">Queue</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value">{{ this_node.capacity.cpu_count }}</div>
+                    <div class="stat-label">CPUs</div>
+                </div>
+            </div>
+            <div class="meta" style="margin-top: 12px;">
+                Max load threshold: {{ "%.1f"|format(this_node.capacity.max_load) }} |
+                Status: <span class="badge badge-{{ 'available' if this_node.capacity.available else 'busy' }}">
+                    {{ 'available' if this_node.capacity.available else 'busy' }}
+                </span>
+            </div>
+        </div>
+
+        <!-- Peer Nodes -->
+        {% for peer in peers %}
+        <div class="node-card {% if not peer.online %}offline{% endif %}">
+            <div class="node-header">
+                <span class="node-name">
+                    <span class="status-dot status-{{ 'online' if peer.online else 'offline' }}"></span>
+                    {{ peer.name }}
+                </span>
+                <span class="badge badge-{{ 'online' if peer.online else 'offline' }}">
+                    {{ 'online' if peer.online else 'offline' }}
+                </span>
+            </div>
+            {% if peer.online and peer.capacity %}
+            <div class="node-stats">
+                <div class="stat-box">
+                    <div class="stat-value">{{ "%.1f"|format(peer.capacity.load_1m) }}</div>
+                    <div class="stat-label">Load (1m)</div>
+                    <div class="progress-bar">
+                        <div class="progress-fill {% if peer.capacity.load_1m > peer.capacity.max_load %}high{% elif peer.capacity.load_1m > peer.capacity.max_load * 0.7 %}medium{% endif %}"
+                             style="width: {{ [100, (peer.capacity.load_1m / peer.capacity.max_load * 100)|int]|min }}%"></div>
+                    </div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value">{{ peer.capacity.slots_free }}/{{ peer.capacity.slots_total }}</div>
+                    <div class="stat-label">Slots Free</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value">{{ peer.capacity.queue_depth }}</div>
+                    <div class="stat-label">Queue</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value">{{ peer.capacity.cpu_count }}</div>
+                    <div class="stat-label">CPUs</div>
+                </div>
+            </div>
+            <div class="meta" style="margin-top: 12px;">
+                {{ peer.host }}:{{ peer.port }} |
+                Transfer: {{ peer.capacity.transfer_mode }} |
+                <span class="badge badge-{{ 'available' if peer.capacity.available else 'busy' }}">
+                    {{ 'available' if peer.capacity.available else 'busy' }}
+                </span>
+            </div>
+            {% else %}
+            <div class="meta" style="margin-top: 12px;">
+                {{ peer.host }}:{{ peer.port }} | Unable to connect
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Distributed Jobs -->
+    <div class="card card-full">
+        <h2>Distributed Jobs</h2>
+        {% if distributed_jobs %}
+        <table>
+            <tr>
+                <th>Title</th>
+                <th>Destination</th>
+                <th>State</th>
+                <th>Timestamp</th>
+            </tr>
+            {% for job in distributed_jobs %}
+            <tr>
+                <td><strong>{{ job.title }}</strong></td>
+                <td>
+                    <span class="badge badge-remote">{{ job.dest_node }}</span>
+                </td>
+                <td>{{ job.state }}</td>
+                <td class="meta">{{ job.timestamp }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% else %}
+        <div class="empty-state">
+            No jobs currently distributed to peers
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Received Jobs (from other nodes) -->
+    <div class="card card-full">
+        <h2>Jobs Received from Peers</h2>
+        {% if received_jobs %}
+        <table>
+            <tr>
+                <th>Title</th>
+                <th>Origin</th>
+                <th>State</th>
+                <th>Received</th>
+            </tr>
+            {% for job in received_jobs %}
+            <tr>
+                <td><strong>{{ job.title }}</strong></td>
+                <td>
+                    <span class="badge badge-local">{{ job.origin_node }}</span>
+                </td>
+                <td>{{ job.state }}</td>
+                <td class="meta">{{ job.received_at or job.timestamp }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% else %}
+        <div class="empty-state">
+            No jobs received from peers
+        </div>
+        {% endif %}
+    </div>
+
+    {% endif %}
+
+    <div class="footer">
+        Pipeline v{{ pipeline_version }} | Dashboard v{{ dashboard_version }} |
+        <a href="{{ github_url }}" target="_blank">dvd-auto-ripper</a> |
+        <a href="/">Back to Dashboard</a> |
+        <a href="/status">Services</a> |
+        <a href="/health">Health</a>
+    </div>
+
+    {% if cluster_enabled %}
+    <script>
+        // Auto-refresh every 30 seconds
+        setTimeout(function() {
+            location.reload();
+        }, 30000);
+    </script>
+    {% endif %}
+</body>
+</html>
+"""
+
 HEALTH_HTML = """
 <!DOCTYPE html>
 <html>
@@ -2522,6 +2846,83 @@ def health_page():
         processes=get_dvd_processes(),
         message=message,
         message_type=message_type,
+        pipeline_version=get_pipeline_version(),
+        dashboard_version=DASHBOARD_VERSION,
+        github_url=GITHUB_URL
+    )
+
+
+def get_distributed_jobs():
+    """Get jobs that have been distributed to peer nodes."""
+    jobs = []
+    # Find distributing and distributed-to-* state files
+    for pattern in ["*.distributing", "*.distributed-to-*"]:
+        for state_file in glob.glob(os.path.join(STAGING_DIR, pattern)):
+            try:
+                with open(state_file, 'r') as f:
+                    metadata = json.load(f)
+                basename = os.path.basename(state_file)
+                state = basename.split('.')[-1]  # Get state from extension
+                jobs.append({
+                    "title": metadata.get("title", "Unknown"),
+                    "timestamp": metadata.get("timestamp", ""),
+                    "dest_node": metadata.get("dest_node", state.replace("distributed-to-", "")),
+                    "state": state,
+                    "file": basename
+                })
+            except:
+                pass
+    return jobs
+
+
+def get_received_jobs():
+    """Get jobs received from peer nodes (is_remote_job=true)."""
+    jobs = []
+    # Check iso-ready, encoding, and encoded-ready for remote jobs
+    for state in ["iso-ready", "encoding", "encoded-ready"]:
+        for state_file in glob.glob(os.path.join(STAGING_DIR, f"*.{state}")):
+            try:
+                with open(state_file, 'r') as f:
+                    metadata = json.load(f)
+                if metadata.get("is_remote_job"):
+                    basename = os.path.basename(state_file)
+                    jobs.append({
+                        "title": metadata.get("title", "Unknown"),
+                        "timestamp": metadata.get("timestamp", ""),
+                        "origin_node": metadata.get("origin_node", "Unknown"),
+                        "received_at": metadata.get("received_at", ""),
+                        "state": state,
+                        "file": basename
+                    })
+            except:
+                pass
+    return jobs
+
+
+@app.route("/cluster")
+def cluster_page():
+    """Cluster status page showing all nodes and distributed jobs."""
+    config = get_cluster_config()
+
+    # Get this node's status
+    this_node = {
+        "node_name": config["node_name"],
+        "transfer_mode": config["transfer_mode"],
+        "capacity": get_worker_capacity()
+    }
+
+    # Get peer status (only if cluster enabled)
+    peers = []
+    if config["cluster_enabled"]:
+        peers = get_all_peer_status()
+
+    return render_template_string(
+        CLUSTER_HTML,
+        cluster_enabled=config["cluster_enabled"],
+        this_node=this_node,
+        peers=peers,
+        distributed_jobs=get_distributed_jobs(),
+        received_jobs=get_received_jobs(),
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
         github_url=GITHUB_URL
