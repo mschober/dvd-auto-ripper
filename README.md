@@ -311,12 +311,22 @@ dvd-auto-ripper/
 │   └── 99-dvd-ripper.rules     # udev rule for disc detection
 ├── features/
 │   └── pending-identification/ # Feature documentation
-├── README.md                   # This file
+├── README.md                   # This file - user guide
+├── TECHNICAL.md                # Architecture and internals
 ├── CLAUDE.md                   # Development guidance
 ├── CONTRIBUTING.md             # Contribution guidelines
 ├── CHANGELOG.md                # Version history
 └── remote-install.sh           # Installation script
 ```
+
+## Documentation
+
+| Document | Purpose |
+|----------|---------|
+| [README.md](README.md) | This file - user guide and quick start |
+| [TECHNICAL.md](TECHNICAL.md) | Architecture, state files, configuration reference |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Versioning, branching, code style |
+| [CHANGELOG.md](CHANGELOG.md) | Version history |
 
 ## Contributing
 
