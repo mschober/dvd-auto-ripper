@@ -1,10 +1,11 @@
 #!/bin/bash
 # Remote Installation Script for DVD Ripper
 # Run this script with sudo on the remote server after deploying files
-# Usage: sudo ./remote-install.sh [--force-config]
+# Usage: sudo ./remote-install.sh [OPTIONS]
 #
 # Options:
 #   --force-config       Overwrite existing configuration file (creates backup)
+#   --merge-config       Merge new config options into existing config (keeps user settings)
 #   --install-libdvdcss  Install libdvdcss for encrypted DVD support (Debian/Ubuntu)
 
 # ==============================================================================
@@ -35,11 +36,16 @@ set -euo pipefail
 
 # Parse command line arguments
 FORCE_CONFIG=false
+MERGE_CONFIG=false
 INSTALL_LIBDVDCSS=false
 while [[ $# -gt 0 ]]; do
     case $1 in
         --force-config)
             FORCE_CONFIG=true
+            shift
+            ;;
+        --merge-config)
+            MERGE_CONFIG=true
             shift
             ;;
         --install-libdvdcss)
@@ -48,7 +54,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: sudo ./remote-install.sh [--force-config] [--install-libdvdcss]"
+            echo "Usage: sudo ./remote-install.sh [--force-config] [--merge-config] [--install-libdvdcss]"
             exit 1
             ;;
     esac
@@ -187,6 +193,80 @@ check_dependencies() {
     print_info "✓ All dependencies satisfied"
 }
 
+merge_config() {
+    # Merge new config options into existing config file
+    # Keeps all existing user settings, adds any new settings from the example
+    local existing_config="$1"
+    local example_config="$2"
+    local output_config="$3"
+
+    print_info "Merging configuration files..."
+
+    # Create associative array of existing settings
+    declare -A existing_settings
+    declare -A existing_comments
+
+    # Track which section we're in for adding new settings
+    local current_section=""
+    local last_section_line=0
+    local line_num=0
+
+    # First pass: read existing config to get all current settings
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        ((line_num++))
+        # Skip empty lines and comments for settings extraction
+        if [[ -n "$line" ]] && [[ ! "$line" =~ ^[[:space:]]*# ]]; then
+            if [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)= ]]; then
+                local key="${BASH_REMATCH[1]}"
+                existing_settings["$key"]="$line"
+            fi
+        fi
+        # Track section headers
+        if [[ "$line" =~ ^#[[:space:]]*=+ ]]; then
+            current_section="$line"
+            last_section_line=$line_num
+        fi
+    done < "$existing_config"
+
+    # Now process the example config and build the merged output
+    # We'll go through the example config and:
+    # 1. Keep all comments/structure from example (for new sections)
+    # 2. Use existing values where they exist
+    # 3. Add new settings that don't exist
+
+    local temp_output=$(mktemp)
+    local in_new_section=false
+    local new_settings_added=0
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)= ]]; then
+            local key="${BASH_REMATCH[1]}"
+            if [[ -v "existing_settings[$key]" ]]; then
+                # Use existing value
+                echo "${existing_settings[$key]}" >> "$temp_output"
+            else
+                # New setting - add it
+                echo "$line" >> "$temp_output"
+                ((new_settings_added++))
+                print_info "  + Added new setting: $key"
+            fi
+        else
+            # Comment or empty line - copy as-is
+            echo "$line" >> "$temp_output"
+        fi
+    done < "$example_config"
+
+    # Move temp file to output
+    mv "$temp_output" "$output_config"
+    chmod 644 "$output_config"
+
+    if [[ $new_settings_added -gt 0 ]]; then
+        print_info "✓ Added $new_settings_added new setting(s) to configuration"
+    else
+        print_info "✓ Configuration is already up to date (no new settings)"
+    fi
+}
+
 install_scripts() {
     print_info "Installing scripts to $INSTALL_BIN..."
 
@@ -246,6 +326,22 @@ install_config() {
         exit 1
     fi
 
+    # Handle --merge-config: merge new settings into existing config
+    if [[ -f "$config_file" ]] && [[ "$MERGE_CONFIG" == "true" ]]; then
+        print_info "Merge mode enabled - preserving existing settings"
+
+        # Create backup
+        local backup_file="${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
+        cp "$config_file" "$backup_file"
+        print_info "✓ Backed up existing configuration to: $backup_file"
+
+        # Merge configs
+        merge_config "$config_file" "$config_source" "$config_file"
+
+        print_info "✓ Configuration merged: $config_file"
+        return
+    fi
+
     if [[ -f "$config_file" ]] && [[ "$FORCE_CONFIG" != "true" ]]; then
         print_warn "Configuration file already exists: $config_file"
 
@@ -255,7 +351,7 @@ install_config() {
         print_info "✓ Backed up existing configuration to: $backup_file"
 
         print_warn "Keeping existing configuration (not overwriting)"
-        print_warn "Use --force-config flag to overwrite"
+        print_warn "Use --force-config to overwrite, or --merge-config to add new settings"
         return
     fi
 
