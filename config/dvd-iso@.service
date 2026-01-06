@@ -15,6 +15,10 @@ User=dvd-rip
 Group=dvd-ripper
 SupplementaryGroups=cdrom
 
+# libdvdcss cache directory (user has no home dir)
+Environment=DVDCSS_CACHE=/var/cache/dvdcss
+Environment=HOME=/var/cache/dvdcss
+
 # Runtime directory for lock files (created automatically)
 # Mode 0775 allows all dvd-ripper group members to write lock files
 RuntimeDirectory=dvd-ripper

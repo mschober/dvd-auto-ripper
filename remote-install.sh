@@ -552,6 +552,15 @@ create_directories() {
     chown root:dvd-ripper "$run_dir"
     print_info "✓ Runtime directory: $run_dir (mode 770, group dvd-ripper)"
 
+    # Create libdvdcss cache directory (service users have no home dirs)
+    local dvdcss_cache="/var/cache/dvdcss"
+    if [[ ! -d "$dvdcss_cache" ]]; then
+        mkdir -p "$dvdcss_cache"
+    fi
+    chmod 775 "$dvdcss_cache"
+    chown root:dvd-ripper "$dvdcss_cache"
+    print_info "✓ DVD CSS cache: $dvdcss_cache (mode 775, group dvd-ripper)"
+
     print_info "✓ Directories ready"
 }
 
