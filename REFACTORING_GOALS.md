@@ -60,29 +60,31 @@ web/
 
 **Priority**: Medium
 **Effort**: Medium (incremental)
-**Status**: Not started
+**Status**: In progress (Phase 1 complete)
 
 The dashboard has no automated tests. Helper functions and API endpoints should be testable.
 
-**Target structure**:
+**See [TESTING.md](./TESTING.md) for the full testing roadmap with phases, fixtures, and examples.**
+
+**Progress**:
+- ✅ Phase 1: Pure functions (no mocking) - `tests/test_pure_functions.py`
+- ⬜ Phase 2: System helpers (file I/O mocking)
+- ⬜ Phase 3: Pipeline helpers (state file mocking)
+- ⬜ Phase 4: Subprocess functions
+- ⬜ Phase 5: Cluster helpers
+- ⬜ Phase 6: API endpoints (Flask test client)
+
+**Test structure**:
 ```
 tests/
 ├── __init__.py
-├── test_helpers/
-│   ├── test_system.py        # Test CPU, memory, load, temps, I/O functions
-│   ├── test_pipeline.py      # Test queue, state file functions
-│   └── test_cluster.py       # Test peer status, capacity functions
-└── test_api/
-    ├── test_health_api.py    # Test /api/health endpoints
-    ├── test_config_api.py    # Test /api/config endpoints
-    └── test_cluster_api.py   # Test /api/cluster endpoints
+├── conftest.py               # Shared fixtures ✅
+├── test_pure_functions.py    # Pure logic tests ✅
+├── test_system_helpers.py    # CPU, memory, load, temps, I/O
+├── test_pipeline_helpers.py  # Queue, state files, locks
+├── test_cluster_helpers.py   # Peer status, capacity
+└── test_api_endpoints.py     # Flask test client for API routes
 ```
-
-**Testing approach**:
-- Use pytest with Flask test client
-- Mock subprocess calls and file reads for system functions
-- Test helper functions in isolation
-- Test API endpoints return correct JSON structure
 
 **When touching dashboard code**:
 - If adding a new helper function → consider writing a test for it

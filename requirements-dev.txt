@@ -1,0 +1,4 @@
+# Development dependencies for testing
+# Install with: pip install -r requirements-dev.txt
+pytest>=9.0.0
+flask>=3.0.0
