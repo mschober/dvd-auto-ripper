@@ -169,10 +169,13 @@ def get_lock_status():
             try:
                 with open(lock_file, 'r') as f:
                     pid = f.read().strip()
-                # Check if process is actually running
-                os.kill(int(pid), 0)
-                status[stage] = {"active": True, "pid": pid}
-            except (ValueError, ProcessLookupError, PermissionError, IOError):
+                # Check if process is actually running via /proc (works across users)
+                # os.kill(pid, 0) requires same-user or root permissions
+                if os.path.exists(f"/proc/{pid}"):
+                    status[stage] = {"active": True, "pid": pid}
+                else:
+                    status[stage] = {"active": False, "pid": None}
+            except (ValueError, IOError):
                 status[stage] = {"active": False, "pid": None}
         else:
             status[stage] = {"active": False, "pid": None}
