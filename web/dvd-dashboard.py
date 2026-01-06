@@ -21,7 +21,7 @@ STAGING_DIR = os.environ.get("STAGING_DIR", "/var/tmp/dvd-rips")
 LOG_FILE = os.environ.get("LOG_FILE", "/var/log/dvd-ripper.log")
 CONFIG_FILE = os.environ.get("CONFIG_FILE", "/etc/dvd-ripper.conf")
 PIPELINE_VERSION_FILE = os.environ.get("PIPELINE_VERSION_FILE", "/usr/local/bin/VERSION")
-DASHBOARD_VERSION = "1.3.0"
+DASHBOARD_VERSION = "1.4.0"
 GITHUB_URL = "https://github.com/mschober/dvd-auto-ripper"
 
 LOCK_FILES = {
@@ -206,6 +206,360 @@ def get_active_progress():
             }
 
     return progress
+
+
+# ============================================================================
+# System Health Functions
+# ============================================================================
+
+def get_cpu_usage():
+    """
+    Read /proc/stat and calculate CPU usage.
+    Returns dict with total and per-core usage percentages.
+    """
+    try:
+        with open('/proc/stat', 'r') as f:
+            lines = f.readlines()
+
+        cpu_data = {}
+        for line in lines:
+            if line.startswith('cpu'):
+                parts = line.split()
+                cpu_name = parts[0]
+                # user, nice, system, idle, iowait, irq, softirq, steal
+                values = [int(x) for x in parts[1:8]]
+                total = sum(values)
+                idle = values[3] + values[4]  # idle + iowait
+                usage = ((total - idle) / total * 100) if total > 0 else 0
+                cpu_data[cpu_name] = {
+                    "usage": round(usage, 1),
+                    "total": total,
+                    "idle": idle
+                }
+
+        return cpu_data
+    except Exception as e:
+        return {"cpu": {"usage": 0, "error": str(e)}}
+
+
+def get_memory_usage():
+    """
+    Read /proc/meminfo and return memory statistics.
+    Returns dict with total, used, available, cached, and percent used.
+    """
+    try:
+        meminfo = {}
+        with open('/proc/meminfo', 'r') as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 2:
+                    key = parts[0].rstrip(':')
+                    # Convert kB to bytes
+                    value = int(parts[1]) * 1024
+                    meminfo[key] = value
+
+        total = meminfo.get('MemTotal', 0)
+        available = meminfo.get('MemAvailable', 0)
+        cached = meminfo.get('Cached', 0) + meminfo.get('Buffers', 0)
+        used = total - available
+
+        return {
+            "total": total,
+            "used": used,
+            "available": available,
+            "cached": cached,
+            "percent": round((used / total * 100) if total > 0 else 0, 1),
+            "total_human": _format_bytes(total),
+            "used_human": _format_bytes(used),
+            "available_human": _format_bytes(available)
+        }
+    except Exception as e:
+        return {"total": 0, "used": 0, "available": 0, "percent": 0, "error": str(e)}
+
+
+def _format_bytes(bytes_val):
+    """Format bytes to human-readable string."""
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if abs(bytes_val) < 1024.0:
+            return f"{bytes_val:.1f} {unit}"
+        bytes_val /= 1024.0
+    return f"{bytes_val:.1f} PB"
+
+
+def get_load_average():
+    """
+    Read /proc/loadavg and return load averages.
+    Returns dict with 1m, 5m, 15m load averages and CPU count.
+    """
+    try:
+        with open('/proc/loadavg', 'r') as f:
+            parts = f.read().split()
+
+        cpu_count = os.cpu_count() or 1
+        load_1m = float(parts[0])
+        load_5m = float(parts[1])
+        load_15m = float(parts[2])
+
+        return {
+            "load_1m": load_1m,
+            "load_5m": load_5m,
+            "load_15m": load_15m,
+            "cpu_count": cpu_count,
+            "load_per_core": round(load_1m / cpu_count, 2),
+            "status": "high" if load_1m > cpu_count else "normal"
+        }
+    except Exception as e:
+        return {"load_1m": 0, "load_5m": 0, "load_15m": 0, "cpu_count": 1, "error": str(e)}
+
+
+def get_temperatures():
+    """
+    Run sensors command and parse temperature/fan output.
+    Returns dict with temperature readings and fan speeds.
+    """
+    result = {
+        "temperatures": [],
+        "fans": [],
+        "available": False
+    }
+
+    try:
+        proc = subprocess.run(
+            ["sensors", "-j"],
+            capture_output=True, text=True, timeout=5
+        )
+        if proc.returncode != 0:
+            return result
+
+        data = json.loads(proc.stdout)
+        result["available"] = True
+
+        for chip_name, chip_data in data.items():
+            if not isinstance(chip_data, dict):
+                continue
+
+            for sensor_name, sensor_data in chip_data.items():
+                if not isinstance(sensor_data, dict):
+                    continue
+
+                for reading_name, reading_val in sensor_data.items():
+                    if 'temp' in reading_name.lower() and '_input' in reading_name:
+                        temp_c = reading_val
+                        result["temperatures"].append({
+                            "chip": chip_name,
+                            "sensor": sensor_name,
+                            "temp_c": round(temp_c, 1),
+                            "temp_f": round(temp_c * 9/5 + 32, 1),
+                            "status": "critical" if temp_c > 85 else "warning" if temp_c > 70 else "ok"
+                        })
+                    elif 'fan' in reading_name.lower() and '_input' in reading_name:
+                        result["fans"].append({
+                            "chip": chip_name,
+                            "sensor": sensor_name,
+                            "rpm": int(reading_val)
+                        })
+
+    except FileNotFoundError:
+        result["error"] = "lm-sensors not installed"
+    except json.JSONDecodeError:
+        # Fall back to text parsing
+        try:
+            proc = subprocess.run(
+                ["sensors"],
+                capture_output=True, text=True, timeout=5
+            )
+            if proc.returncode == 0:
+                result["available"] = True
+                result["raw_output"] = proc.stdout
+                # Parse text output for temperatures
+                for line in proc.stdout.split('\n'):
+                    if '°C' in line:
+                        match = re.search(r'([+-]?\d+\.?\d*)\s*°C', line)
+                        if match:
+                            temp_c = float(match.group(1))
+                            label = line.split(':')[0].strip() if ':' in line else "CPU"
+                            result["temperatures"].append({
+                                "sensor": label,
+                                "temp_c": round(temp_c, 1),
+                                "status": "critical" if temp_c > 85 else "warning" if temp_c > 70 else "ok"
+                            })
+                    if 'RPM' in line:
+                        match = re.search(r'(\d+)\s*RPM', line)
+                        if match:
+                            rpm = int(match.group(1))
+                            label = line.split(':')[0].strip() if ':' in line else "Fan"
+                            result["fans"].append({
+                                "sensor": label,
+                                "rpm": rpm
+                            })
+        except Exception:
+            pass
+    except subprocess.TimeoutExpired:
+        result["error"] = "sensors command timed out"
+    except Exception as e:
+        result["error"] = str(e)
+
+    return result
+
+
+def get_dvd_processes():
+    """
+    Get list of DVD ripper related processes.
+    Returns list of process info dicts.
+    """
+    # Processes we care about
+    target_commands = ['HandBrakeCLI', 'ddrescue', 'rsync', 'ffmpeg', 'dvd-iso', 'dvd-encoder', 'dvd-transfer']
+
+    processes = []
+    try:
+        proc = subprocess.run(
+            ["ps", "aux"],
+            capture_output=True, text=True, timeout=5
+        )
+
+        for line in proc.stdout.split('\n')[1:]:  # Skip header
+            if not line.strip():
+                continue
+
+            # Check if line contains any target command
+            matched_cmd = None
+            for cmd in target_commands:
+                if cmd in line:
+                    matched_cmd = cmd
+                    break
+
+            if matched_cmd:
+                parts = line.split(None, 10)  # Split into max 11 parts
+                if len(parts) >= 11:
+                    pid = parts[1]
+                    cpu_pct = float(parts[2])
+                    mem_pct = float(parts[3])
+                    start_time = parts[8]
+                    elapsed = parts[9]
+                    command = parts[10]
+
+                    # Determine process type based on command
+                    process_type = "unknown"
+                    if 'HandBrakeCLI' in command:
+                        process_type = "encoder"
+                    elif 'ddrescue' in command:
+                        process_type = "iso"
+                    elif 'rsync' in command or 'scp' in command:
+                        process_type = "transfer"
+                    elif 'ffmpeg' in command:
+                        process_type = "preview"
+
+                    processes.append({
+                        "pid": int(pid),
+                        "cpu_percent": cpu_pct,
+                        "mem_percent": mem_pct,
+                        "start_time": start_time,
+                        "elapsed": elapsed,
+                        "command": command[:100],  # Truncate long commands
+                        "command_full": command,
+                        "type": process_type,
+                        "matched": matched_cmd
+                    })
+
+    except Exception as e:
+        processes.append({"error": str(e)})
+
+    # Sort by CPU usage descending
+    return sorted(processes, key=lambda x: x.get("cpu_percent", 0), reverse=True)
+
+
+def kill_process_with_cleanup(pid):
+    """
+    Kill a DVD ripper process and clean up associated state.
+    Returns tuple of (success, message).
+    """
+    pid = int(pid)
+
+    # First verify this is one of our processes
+    processes = get_dvd_processes()
+    target_process = None
+    for proc in processes:
+        if proc.get("pid") == pid:
+            target_process = proc
+            break
+
+    if not target_process:
+        return False, f"PID {pid} is not a DVD ripper process"
+
+    process_type = target_process.get("type", "unknown")
+
+    # Try to find associated lock file
+    lock_file = None
+    if process_type == "encoder":
+        lock_file = LOCK_FILES.get("encoder")
+    elif process_type == "iso":
+        lock_file = LOCK_FILES.get("iso")
+    elif process_type == "transfer":
+        lock_file = LOCK_FILES.get("transfer")
+
+    # Find associated state file for cleanup
+    state_to_revert = None
+    revert_to = None
+
+    if process_type == "encoder":
+        state_to_revert = "encoding"
+        revert_to = "iso-ready"
+    elif process_type == "iso":
+        state_to_revert = "iso-creating"
+        revert_to = None  # Just remove, disc can be re-inserted
+    elif process_type == "transfer":
+        state_to_revert = "transferring"
+        revert_to = "encoded-ready"
+
+    try:
+        # Send SIGTERM first
+        os.kill(pid, 15)  # SIGTERM
+
+        # Wait a moment for graceful shutdown
+        import time
+        time.sleep(2)
+
+        # Check if still running, send SIGKILL if needed
+        try:
+            os.kill(pid, 0)  # Check if process exists
+            os.kill(pid, 9)  # SIGKILL
+        except ProcessLookupError:
+            pass  # Process already terminated
+
+        # Clean up lock file
+        if lock_file and os.path.exists(lock_file):
+            try:
+                os.remove(lock_file)
+            except Exception:
+                pass
+
+        # Revert state files
+        cleanup_msg = ""
+        if state_to_revert:
+            pattern = os.path.join(STAGING_DIR, f"*.{state_to_revert}")
+            for state_file in glob.glob(pattern):
+                try:
+                    if revert_to:
+                        # Rename to previous state
+                        base = state_file.rsplit('.', 1)[0]
+                        new_state_file = f"{base}.{revert_to}"
+                        os.rename(state_file, new_state_file)
+                        cleanup_msg += f" Reverted {os.path.basename(state_file)} to {revert_to}."
+                    else:
+                        # Just remove the state file
+                        os.remove(state_file)
+                        cleanup_msg += f" Removed {os.path.basename(state_file)}."
+                except Exception as e:
+                    cleanup_msg += f" Failed to clean up {os.path.basename(state_file)}: {e}"
+
+        return True, f"Killed PID {pid} ({process_type}).{cleanup_msg}"
+
+    except ProcessLookupError:
+        return False, f"Process {pid} not found"
+    except PermissionError:
+        return False, f"Permission denied to kill PID {pid}"
+    except Exception as e:
+        return False, f"Failed to kill PID {pid}: {e}"
 
 
 def read_config():
@@ -864,6 +1218,7 @@ DASHBOARD_HTML = """
             <a href="/logs">Logs</a> |
             <a href="/config">Config</a> |
             <a href="/status">Status</a> |
+            <a href="/health">Health</a> |
             <a href="/identify">
                 Pending ID
                 {% if pending_identification > 0 %}
@@ -1736,6 +2091,326 @@ STATUS_HTML = """
 </html>
 """
 
+HEALTH_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>System Health - DVD Ripper</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0; padding: 20px; background: #0f172a; color: #e2e8f0;
+            min-height: 100vh;
+        }
+        h1 { margin: 0 0 8px 0; color: #f1f5f9; }
+        h1 a { color: #60a5fa; text-decoration: none; }
+        h1 a:hover { text-decoration: underline; }
+        h2 { margin: 0 0 16px 0; font-size: 14px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; }
+        .subtitle { color: #94a3b8; margin-bottom: 20px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 20px; }
+        .card {
+            background: #1e293b;
+            border-radius: 8px;
+            padding: 16px;
+            border: 1px solid #334155;
+        }
+        .metric-value { font-size: 32px; font-weight: 700; color: #f1f5f9; }
+        .metric-label { font-size: 12px; color: #94a3b8; text-transform: uppercase; margin-top: 4px; }
+        .metric-bar { background: #334155; height: 8px; border-radius: 4px; margin-top: 12px; overflow: hidden; }
+        .metric-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+        .fill-ok { background: linear-gradient(90deg, #10b981, #34d399); }
+        .fill-warn { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+        .fill-danger { background: linear-gradient(90deg, #ef4444, #f87171); }
+        .load-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; text-align: center; }
+        .load-value { font-size: 24px; font-weight: 600; color: #f1f5f9; }
+        .load-label { font-size: 11px; color: #64748b; }
+        .temp-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #334155; }
+        .temp-item:last-child { border-bottom: none; }
+        .temp-label { color: #94a3b8; font-size: 13px; }
+        .temp-value { font-weight: 600; }
+        .temp-ok { color: #10b981; }
+        .temp-warn { color: #f59e0b; }
+        .temp-critical { color: #ef4444; }
+        .fan-rpm { color: #60a5fa; font-size: 13px; }
+
+        /* Process table styles */
+        .process-card { grid-column: 1 / -1; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th { text-align: left; padding: 10px 8px; color: #64748b; font-weight: 600; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #334155; }
+        td { padding: 10px 8px; border-bottom: 1px solid #1e293b; }
+        tr:hover { background: #334155; }
+        .pid { font-family: monospace; color: #94a3b8; }
+        .cpu-high { color: #ef4444; font-weight: 600; }
+        .cpu-med { color: #f59e0b; }
+        .cpu-low { color: #10b981; }
+        .command { font-family: monospace; font-size: 11px; color: #94a3b8; max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .type-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .type-encoder { background: #3b82f6; color: white; }
+        .type-iso { background: #f59e0b; color: white; }
+        .type-transfer { background: #8b5cf6; color: white; }
+        .type-preview { background: #10b981; color: white; }
+        .type-unknown { background: #6b7280; color: white; }
+
+        .btn {
+            padding: 4px 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        .btn-kill { background: #dc2626; color: white; }
+        .btn-kill:hover { background: #b91c1c; }
+        .btn-kill:disabled { background: #6b7280; cursor: not-allowed; }
+
+        .no-processes { color: #64748b; text-align: center; padding: 40px; }
+        .flash { padding: 12px 16px; border-radius: 4px; margin-bottom: 16px; }
+        .flash-success { background: #065f46; color: #d1fae5; border: 1px solid #10b981; }
+        .flash-error { background: #991b1b; color: #fee2e2; border: 1px solid #ef4444; }
+        .footer {
+            margin-top: 20px;
+            font-size: 12px;
+            color: #64748b;
+            text-align: center;
+        }
+        .footer a { color: #60a5fa; text-decoration: none; }
+        .auto-refresh { font-size: 11px; color: #64748b; margin-top: 8px; }
+        .sensors-unavailable { color: #64748b; font-style: italic; font-size: 13px; }
+
+        /* Kill confirmation modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 100;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal {
+            background: #1e293b;
+            border-radius: 8px;
+            padding: 24px;
+            max-width: 400px;
+            border: 1px solid #334155;
+        }
+        .modal h3 { margin: 0 0 12px 0; color: #f1f5f9; }
+        .modal p { color: #94a3b8; margin: 0 0 20px 0; font-size: 14px; }
+        .modal-buttons { display: flex; gap: 12px; justify-content: flex-end; }
+        .btn-cancel { background: #475569; color: white; padding: 8px 16px; }
+        .btn-cancel:hover { background: #64748b; }
+        .btn-confirm-kill { background: #dc2626; color: white; padding: 8px 16px; }
+        .btn-confirm-kill:hover { background: #b91c1c; }
+    </style>
+</head>
+<body>
+    <h1><a href="/">Dashboard</a> / System Health</h1>
+    <p class="subtitle">Real-time system metrics and process monitoring</p>
+
+    {% if message %}
+    <div class="flash flash-{{ message_type }}">{{ message }}</div>
+    {% endif %}
+
+    <div class="grid">
+        <div class="card">
+            <h2>CPU Usage</h2>
+            <div class="metric-value" id="cpu-value">{{ cpu.cpu.usage if cpu.cpu else 0 }}%</div>
+            <div class="metric-label">Total CPU</div>
+            <div class="metric-bar">
+                <div class="metric-fill {% if cpu.cpu.usage > 80 %}fill-danger{% elif cpu.cpu.usage > 50 %}fill-warn{% else %}fill-ok{% endif %}"
+                     id="cpu-bar" style="width: {{ cpu.cpu.usage if cpu.cpu else 0 }}%"></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Memory</h2>
+            <div class="metric-value" id="mem-value">{{ memory.percent }}%</div>
+            <div class="metric-label">{{ memory.used_human }} / {{ memory.total_human }}</div>
+            <div class="metric-bar">
+                <div class="metric-fill {% if memory.percent > 80 %}fill-danger{% elif memory.percent > 60 %}fill-warn{% else %}fill-ok{% endif %}"
+                     id="mem-bar" style="width: {{ memory.percent }}%"></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Load Average</h2>
+            <div class="load-grid">
+                <div>
+                    <div class="load-value {% if load.load_1m > load.cpu_count %}temp-critical{% elif load.load_1m > load.cpu_count * 0.8 %}temp-warn{% else %}temp-ok{% endif %}" id="load-1m">{{ "%.2f"|format(load.load_1m) }}</div>
+                    <div class="load-label">1 min</div>
+                </div>
+                <div>
+                    <div class="load-value" id="load-5m">{{ "%.2f"|format(load.load_5m) }}</div>
+                    <div class="load-label">5 min</div>
+                </div>
+                <div>
+                    <div class="load-value" id="load-15m">{{ "%.2f"|format(load.load_15m) }}</div>
+                    <div class="load-label">15 min</div>
+                </div>
+            </div>
+            <div class="metric-label" style="margin-top: 12px; text-align: center;">
+                {{ load.cpu_count }} cores | {{ "%.2f"|format(load.load_per_core) }} per core
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Temperature & Fans</h2>
+            {% if temps.available %}
+                {% for temp in temps.temperatures %}
+                <div class="temp-item">
+                    <span class="temp-label">{{ temp.sensor }}</span>
+                    <span class="temp-value temp-{{ temp.status }}">{{ temp.temp_c }}°C</span>
+                </div>
+                {% endfor %}
+                {% for fan in temps.fans %}
+                <div class="temp-item">
+                    <span class="temp-label">{{ fan.sensor }}</span>
+                    <span class="fan-rpm">{{ fan.rpm }} RPM</span>
+                </div>
+                {% endfor %}
+                {% if not temps.temperatures and not temps.fans %}
+                <p class="sensors-unavailable">No temperature/fan sensors detected</p>
+                {% endif %}
+            {% else %}
+                <p class="sensors-unavailable">
+                    {% if temps.error %}
+                    {{ temps.error }}
+                    {% else %}
+                    Sensors not available
+                    {% endif %}
+                </p>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="grid">
+        <div class="card process-card">
+            <h2>DVD Ripper Processes</h2>
+            {% if processes %}
+            <table>
+                <tr>
+                    <th>PID</th>
+                    <th>Type</th>
+                    <th>CPU%</th>
+                    <th>MEM%</th>
+                    <th>Time</th>
+                    <th>Command</th>
+                    <th>Action</th>
+                </tr>
+                {% for proc in processes %}
+                <tr>
+                    <td class="pid">{{ proc.pid }}</td>
+                    <td><span class="type-badge type-{{ proc.type }}">{{ proc.type }}</span></td>
+                    <td class="{% if proc.cpu_percent > 80 %}cpu-high{% elif proc.cpu_percent > 30 %}cpu-med{% else %}cpu-low{% endif %}">
+                        {{ "%.1f"|format(proc.cpu_percent) }}%
+                    </td>
+                    <td>{{ "%.1f"|format(proc.mem_percent) }}%</td>
+                    <td>{{ proc.elapsed }}</td>
+                    <td class="command" title="{{ proc.command_full }}">{{ proc.command }}</td>
+                    <td>
+                        <button class="btn btn-kill" onclick="confirmKill({{ proc.pid }}, '{{ proc.type }}')">Kill</button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </table>
+            {% else %}
+            <p class="no-processes">No DVD ripper processes currently running</p>
+            {% endif %}
+            <p class="auto-refresh">Auto-refreshes every 5 seconds</p>
+        </div>
+    </div>
+
+    <!-- Kill Confirmation Modal -->
+    <div class="modal-overlay" id="kill-modal">
+        <div class="modal">
+            <h3>Confirm Kill Process</h3>
+            <p>Are you sure you want to kill PID <strong id="kill-pid"></strong>?<br><br>
+            This will terminate the <strong id="kill-type"></strong> process and revert any in-progress state files.</p>
+            <div class="modal-buttons">
+                <button class="btn btn-cancel" onclick="closeModal()">Cancel</button>
+                <form method="POST" id="kill-form" style="display:inline">
+                    <button class="btn btn-confirm-kill" type="submit">Kill Process</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">
+        Pipeline v{{ pipeline_version }} | Dashboard v{{ dashboard_version }} |
+        <a href="{{ github_url }}" target="_blank">dvd-auto-ripper</a> |
+        <a href="/">Dashboard</a> |
+        <a href="/status">Services</a>
+    </div>
+
+    <script>
+    function confirmKill(pid, type) {
+        document.getElementById('kill-pid').textContent = pid;
+        document.getElementById('kill-type').textContent = type;
+        document.getElementById('kill-form').action = '/api/kill/' + pid;
+        document.getElementById('kill-modal').classList.add('active');
+    }
+
+    function closeModal() {
+        document.getElementById('kill-modal').classList.remove('active');
+    }
+
+    // Close modal on overlay click
+    document.getElementById('kill-modal').addEventListener('click', function(e) {
+        if (e.target === this) closeModal();
+    });
+
+    // Auto-refresh health data every 5 seconds
+    function updateHealth() {
+        fetch('/api/health')
+            .then(response => response.json())
+            .then(data => {
+                // Update CPU
+                if (data.cpu && data.cpu.cpu) {
+                    document.getElementById('cpu-value').textContent = data.cpu.cpu.usage + '%';
+                    const cpuBar = document.getElementById('cpu-bar');
+                    cpuBar.style.width = data.cpu.cpu.usage + '%';
+                    cpuBar.className = 'metric-fill ' + (data.cpu.cpu.usage > 80 ? 'fill-danger' : data.cpu.cpu.usage > 50 ? 'fill-warn' : 'fill-ok');
+                }
+
+                // Update Memory
+                if (data.memory) {
+                    document.getElementById('mem-value').textContent = data.memory.percent + '%';
+                    const memBar = document.getElementById('mem-bar');
+                    memBar.style.width = data.memory.percent + '%';
+                    memBar.className = 'metric-fill ' + (data.memory.percent > 80 ? 'fill-danger' : data.memory.percent > 60 ? 'fill-warn' : 'fill-ok');
+                }
+
+                // Update Load
+                if (data.load) {
+                    document.getElementById('load-1m').textContent = data.load.load_1m.toFixed(2);
+                    document.getElementById('load-5m').textContent = data.load.load_5m.toFixed(2);
+                    document.getElementById('load-15m').textContent = data.load.load_15m.toFixed(2);
+                }
+            })
+            .catch(err => console.log('Health update failed:', err));
+    }
+
+    // Update every 5 seconds
+    setInterval(updateHealth, 5000);
+
+    // Refresh full page every 30 seconds for process list
+    setTimeout(() => location.reload(), 30000);
+    </script>
+</body>
+</html>
+"""
+
 
 # ============================================================================
 # Routes
@@ -1832,6 +2507,27 @@ def status_page():
     )
 
 
+@app.route("/health")
+def health_page():
+    """System health monitoring page."""
+    message = request.args.get("message")
+    message_type = request.args.get("type", "success")
+
+    return render_template_string(
+        HEALTH_HTML,
+        cpu=get_cpu_usage(),
+        memory=get_memory_usage(),
+        load=get_load_average(),
+        temps=get_temperatures(),
+        processes=get_dvd_processes(),
+        message=message,
+        message_type=message_type,
+        pipeline_version=get_pipeline_version(),
+        dashboard_version=DASHBOARD_VERSION,
+        github_url=GITHUB_URL
+    )
+
+
 # ============================================================================
 # API Routes
 # ============================================================================
@@ -1882,6 +2578,47 @@ def api_locks():
 def api_progress():
     """API: Get real-time progress for active processes."""
     return jsonify(get_active_progress())
+
+
+@app.route("/api/health")
+def api_health():
+    """API: Get system health metrics."""
+    return jsonify({
+        "cpu": get_cpu_usage(),
+        "memory": get_memory_usage(),
+        "load": get_load_average(),
+        "temps": get_temperatures()
+    })
+
+
+@app.route("/api/processes")
+def api_processes():
+    """API: Get list of DVD ripper processes."""
+    return jsonify(get_dvd_processes())
+
+
+@app.route("/api/kill/<int:pid>", methods=["POST"])
+def api_kill_process(pid):
+    """API: Kill a DVD ripper process with cleanup."""
+    success, message = kill_process_with_cleanup(pid)
+
+    # If called from form, redirect back to health page
+    if request.headers.get("Accept", "").startswith("text/html") or \
+       request.content_type != "application/json":
+        if success:
+            return redirect(url_for("health_page",
+                                    message=message,
+                                    type="success"))
+        else:
+            return redirect(url_for("health_page",
+                                    message=message,
+                                    type="error"))
+
+    # JSON response for API calls
+    if success:
+        return jsonify({"status": "ok", "message": message})
+    else:
+        return jsonify({"error": message}), 500
 
 
 @app.route("/api/trigger/<stage>", methods=["POST"])

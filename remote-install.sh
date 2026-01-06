@@ -553,6 +553,43 @@ install_web_dashboard() {
     fi
 }
 
+install_lm_sensors() {
+    # Install lm-sensors for system health monitoring (optional)
+    print_info "Checking lm-sensors for temperature/fan monitoring..."
+
+    # Check if sensors command is available
+    if command -v sensors &>/dev/null; then
+        print_info "✓ lm-sensors already installed"
+        return 0
+    fi
+
+    print_info "Installing lm-sensors..."
+
+    if [[ -f /etc/debian_version ]]; then
+        # Debian/Ubuntu
+        if apt-get install -y lm-sensors >/dev/null 2>&1; then
+            print_info "✓ lm-sensors installed"
+            # Run sensors-detect non-interactively (auto-accept defaults)
+            print_info "Running sensors-detect (auto mode)..."
+            yes "" | sensors-detect --auto >/dev/null 2>&1 || true
+            print_info "✓ sensors-detect complete"
+        else
+            print_warn "Could not install lm-sensors (non-fatal)"
+        fi
+    elif [[ -f /etc/redhat-release ]]; then
+        # RHEL/CentOS/Fedora
+        if yum install -y lm_sensors >/dev/null 2>&1; then
+            print_info "✓ lm-sensors installed"
+            yes "" | sensors-detect --auto >/dev/null 2>&1 || true
+            print_info "✓ sensors-detect complete"
+        else
+            print_warn "Could not install lm-sensors (non-fatal)"
+        fi
+    else
+        print_warn "Unknown distribution - please install lm-sensors manually for temperature monitoring"
+    fi
+}
+
 test_installation() {
     print_info ""
     print_info "=========================================="
@@ -769,6 +806,9 @@ main() {
 
     # Install web dashboard (optional but recommended)
     install_web_dashboard
+
+    # Install lm-sensors for health monitoring (optional)
+    install_lm_sensors
 
     # Test installation
     test_installation

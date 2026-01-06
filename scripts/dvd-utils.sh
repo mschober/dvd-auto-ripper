@@ -641,6 +641,155 @@ release_stage_lock() {
 }
 
 # ============================================================================
+# Pipeline Mode: Parallel Encoding Support
+# ============================================================================
+
+# Default parallel encoding configuration
+MAX_PARALLEL_ENCODERS="${MAX_PARALLEL_ENCODERS:-2}"
+ENCODER_LOAD_THRESHOLD="${ENCODER_LOAD_THRESHOLD:-0.8}"
+ENABLE_PARALLEL_ENCODING="${ENABLE_PARALLEL_ENCODING:-0}"
+
+# Get current 1-minute load average
+# Usage: get_load_average
+# Returns: load average as decimal (e.g., "2.15")
+get_load_average() {
+    cut -d' ' -f1 /proc/loadavg
+}
+
+# Get CPU count
+# Usage: get_cpu_count
+# Returns: number of CPU cores
+get_cpu_count() {
+    nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo "1"
+}
+
+# Check if system load is low enough to start an encoder
+# Usage: should_start_encoder
+# Returns: 0 if safe to start, 1 if system too busy
+should_start_encoder() {
+    local load_1m=$(get_load_average)
+    local cpu_count=$(get_cpu_count)
+    local threshold=$(awk "BEGIN {printf \"%.2f\", $cpu_count * $ENCODER_LOAD_THRESHOLD}")
+
+    # Compare load to threshold using awk for decimal comparison
+    local is_under_threshold=$(awk "BEGIN {print ($load_1m < $threshold) ? 1 : 0}")
+
+    if [[ "$is_under_threshold" == "1" ]]; then
+        log_debug "Load check passed: $load_1m < $threshold (${cpu_count} cores * ${ENCODER_LOAD_THRESHOLD})"
+        return 0
+    else
+        log_info "Load too high: $load_1m >= $threshold, skipping encoder start"
+        return 1
+    fi
+}
+
+# Count currently active encoder slots
+# Usage: count_active_encoders
+# Returns: number of active encoder processes
+count_active_encoders() {
+    local count=0
+    for i in $(seq 1 "$MAX_PARALLEL_ENCODERS"); do
+        local lock_file="/var/run/dvd-ripper-encoder-${i}.lock"
+        if [[ -f "$lock_file" ]]; then
+            local pid=$(cat "$lock_file" 2>/dev/null)
+            if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+                count=$((count + 1))
+            fi
+        fi
+    done
+    echo "$count"
+}
+
+# Acquire an encoder slot for parallel encoding
+# Usage: acquire_encoder_slot
+# Returns: slot number (1-N) on stdout, 0 exit code if acquired, 1 if none available
+acquire_encoder_slot() {
+    # If parallel encoding is disabled, use legacy single lock
+    if [[ "$ENABLE_PARALLEL_ENCODING" != "1" ]]; then
+        if acquire_stage_lock "encoder"; then
+            echo "0"  # Slot 0 = legacy mode
+            return 0
+        fi
+        return 1
+    fi
+
+    # Check load before acquiring
+    if ! should_start_encoder; then
+        return 1
+    fi
+
+    # Try to find an available slot
+    for i in $(seq 1 "$MAX_PARALLEL_ENCODERS"); do
+        local lock_file="/var/run/dvd-ripper-encoder-${i}.lock"
+
+        if [[ -f "$lock_file" ]]; then
+            local existing_pid=$(cat "$lock_file" 2>/dev/null)
+            if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+                # Slot is busy
+                continue
+            else
+                # Stale lock, clean up
+                log_info "Stale encoder-${i} lock found, removing"
+                rm -f "$lock_file"
+            fi
+        fi
+
+        # Try to claim this slot
+        echo "$$" > "$lock_file"
+        log_info "Acquired encoder slot $i with PID $$"
+        echo "$i"
+        return 0
+    done
+
+    log_debug "All encoder slots ($MAX_PARALLEL_ENCODERS) are busy"
+    return 1
+}
+
+# Release a specific encoder slot
+# Usage: release_encoder_slot SLOT_NUMBER
+release_encoder_slot() {
+    local slot="$1"
+
+    # If slot 0 (legacy mode), use legacy release
+    if [[ "$slot" == "0" ]]; then
+        release_stage_lock "encoder"
+        return
+    fi
+
+    local lock_file="/var/run/dvd-ripper-encoder-${slot}.lock"
+    if [[ -f "$lock_file" ]]; then
+        rm -f "$lock_file"
+        log_debug "Released encoder slot $slot"
+    fi
+}
+
+# Claim a state file atomically for processing
+# Used to prevent race conditions when multiple encoders run in parallel
+# Usage: claim_state_file STATE_FILE NEW_STATE
+# Returns: 0 if claimed successfully, 1 if another worker got it
+claim_state_file() {
+    local state_file="$1"
+    local new_state="$2"
+
+    # Extract components from state file name
+    local basename=$(basename "$state_file")
+    local old_state="${basename##*.}"
+    local name_part="${basename%.${old_state}}"
+
+    local new_file="${STAGING_DIR}/${name_part}.${new_state}"
+
+    # Try atomic rename - if it fails, another worker got it
+    if mv "$state_file" "$new_file" 2>/dev/null; then
+        log_info "Claimed: $basename -> ${name_part}.${new_state}"
+        echo "$new_file"
+        return 0
+    else
+        log_debug "Failed to claim $basename - another worker got it"
+        return 1
+    fi
+}
+
+# ============================================================================
 # Pipeline Mode: JSON State File Management
 # ============================================================================
 

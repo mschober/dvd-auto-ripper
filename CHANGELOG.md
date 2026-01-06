@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-01-05
+
+### Added
+- System Health monitoring page (`/health`) with HTOP-like process view
+- Real-time CPU, memory, load average monitoring
+- Temperature and fan speed monitoring via lm-sensors
+- Kill button for DVD ripper processes with state cleanup
+- Parallel encoding support (disabled by default, load-based dynamic worker pool)
+- API endpoints: `/api/health`, `/api/processes`, `/api/kill/<pid>`
+- lm-sensors auto-installation in remote-install.sh
+
+### Configuration
+- `ENABLE_PARALLEL_ENCODING` - Enable/disable parallel encoding
+- `MAX_PARALLEL_ENCODERS` - Maximum concurrent encoding processes
+- `ENCODER_LOAD_THRESHOLD` - Load threshold for starting new encoders
+
+## [1.3.0] - 2026-01-05
+
+### Added
+- Real-time progress bars on main dashboard
+- Progress parsing for HandBrake, ddrescue, and rsync operations
+- ETA and speed display for active encoding/transfer jobs
+- Auto-refresh progress updates every 10 seconds
+- API endpoint: `/api/progress`
+- `dvd-dashboard-install.sh` script for standalone dashboard installation
+- Dashboard auto-restart on remote-install updates
+
 ## [1.2.0] - 2025-01-05
 
 ### Added

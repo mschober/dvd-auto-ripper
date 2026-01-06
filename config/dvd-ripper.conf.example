@@ -169,6 +169,32 @@ DISK_USAGE_THRESHOLD="80"
 CLEANUP_PREVIEW_AFTER_TRANSFER="0"
 
 # ============================================================================
+# Parallel Encoding Configuration
+# ============================================================================
+# Enable parallel encoding to run multiple HandBrake instances simultaneously
+# based on system load. Useful for multi-core systems with multiple DVDs queued.
+#
+# When enabled, the encoder uses numbered lock files instead of a single lock:
+#   /var/run/dvd-ripper-encoder-1.lock
+#   /var/run/dvd-ripper-encoder-2.lock
+#   etc.
+
+# Enable parallel encoding (0=disabled/single encoder, 1=enabled)
+# Default: disabled for safety - enable after testing on your system
+ENABLE_PARALLEL_ENCODING="0"
+
+# Maximum number of concurrent encoding processes
+# Recommended: 1-2 for quad-core, 2-4 for 8+ cores
+# Each HandBrake instance typically uses 100-200% CPU
+MAX_PARALLEL_ENCODERS="2"
+
+# Load threshold per CPU core before starting new encoders
+# Value 0.0-1.0 multiplied by CPU count gives max load average
+# Example: 0.8 on 4-core system = don't start if load > 3.2
+# Lower = more conservative, higher = more aggressive
+ENCODER_LOAD_THRESHOLD="0.8"
+
+# ============================================================================
 # Preview Generation Configuration
 # ============================================================================
 # Previews are short video clips extracted during encoding to help identify
