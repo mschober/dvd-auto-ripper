@@ -38,7 +38,7 @@ The DVD auto-ripper uses a **3-stage pipeline** that decouples disc handling fro
 │                   └────────────┘       └────────────┘       └──────────┘   │
 │                                                                             │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│  State Files: .iso-ready-* → .encoding-* → .encoded-ready-* → (cleanup)    │
+│  State Files: *.iso-ready → *.encoding → *.encoded-ready → (cleanup)       │
 │  Lock Files:  /var/run/dvd-ripper-{iso,encoder,transfer}.lock              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -298,9 +298,11 @@ Examples (with encoding enabled):
 
 ```
 /var/tmp/dvd-rips/          # Staging directory (output storage)
-├── .ripping-*              # State file during ISO creation
-├── .completed-*            # State file after ISO/encoding complete
-├── .transferring-*         # State file during NAS transfer
+├── *.iso-creating          # State file during ISO creation
+├── *.iso-ready             # State file when ISO complete, awaiting encode
+├── *.encoding              # State file during HandBrake encoding
+├── *.encoded-ready         # State file when encode complete, awaiting transfer
+├── *.transferring          # State file during NAS transfer
 ├── Movie-Title-*.iso       # ISO image (if CREATE_ISO=1)
 ├── Movie-Title-*.iso.mapfile  # ddrescue progress map
 └── Movie-Title-*.mkv       # Encoded video (if ENCODE_VIDEO=1)
@@ -384,8 +386,9 @@ The system can recover from interrupted rips/transfers. To manually check:
 
 ```bash
 # Look for state files
-ls -la /var/tmp/dvd-rips/.ripping-*
-ls -la /var/tmp/dvd-rips/.transferring-*
+ls -la /var/tmp/dvd-rips/*.iso-ready
+ls -la /var/tmp/dvd-rips/*.encoded-ready
+ls -la /var/tmp/dvd-rips/*.transferring
 
 # Check lock file
 cat /var/run/dvd-ripper.pid

@@ -48,7 +48,7 @@ def get_queue_items():
     """Read all state files and return sorted list of queue items."""
     items = []
     for state in STATE_ORDER:
-        pattern = os.path.join(STAGING_DIR, f".{state}-*")
+        pattern = os.path.join(STAGING_DIR, f"*.{state}")
         for state_file in glob.glob(pattern):
             try:
                 with open(state_file, 'r') as f:
@@ -70,7 +70,7 @@ def count_by_state():
     """Return dict of counts by state."""
     counts = {}
     for state in STATE_ORDER:
-        pattern = os.path.join(STAGING_DIR, f".{state}-*")
+        pattern = os.path.join(STAGING_DIR, f"*.{state}")
         counts[state] = len(glob.glob(pattern))
     return counts
 
@@ -415,7 +415,7 @@ ARCHITECTURE_HTML = """
 │                   └────────────┘       └────────────┘       └──────────┘   │
 │                                                                             │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│  State Files: .iso-ready-* → .encoding-* → .encoded-ready-* → (cleanup)    │
+│  State Files: *.iso-ready → *.encoding → *.encoded-ready → (cleanup)       │
 │  Lock Files:  /var/run/dvd-ripper-{iso,encoder,transfer}.lock              │
 └─────────────────────────────────────────────────────────────────────────────┘
         </pre>
@@ -472,27 +472,27 @@ ARCHITECTURE_HTML = """
                 <th>Next Action</th>
             </tr>
             <tr>
-                <td><span class="state-file">.iso-creating-*</span></td>
+                <td><span class="state-file">*.iso-creating</span></td>
                 <td>ISO creation in progress (ddrescue running)</td>
                 <td>Wait for completion</td>
             </tr>
             <tr>
-                <td><span class="state-file">.iso-ready-*</span></td>
+                <td><span class="state-file">*.iso-ready</span></td>
                 <td>ISO complete, waiting for encoder</td>
                 <td>Encoder picks up oldest</td>
             </tr>
             <tr>
-                <td><span class="state-file">.encoding-*</span></td>
+                <td><span class="state-file">*.encoding</span></td>
                 <td>HandBrake encoding in progress</td>
                 <td>Wait for completion</td>
             </tr>
             <tr>
-                <td><span class="state-file">.encoded-ready-*</span></td>
+                <td><span class="state-file">*.encoded-ready</span></td>
                 <td>MKV ready, waiting for transfer</td>
                 <td>Transfer picks up oldest</td>
             </tr>
             <tr>
-                <td><span class="state-file">.transferring-*</span></td>
+                <td><span class="state-file">*.transferring</span></td>
                 <td>rsync/scp transfer in progress</td>
                 <td>Wait for completion</td>
             </tr>
