@@ -11,11 +11,37 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=dvd-transfer
 
+# User isolation - run as dvd-transfer user
+User=dvd-transfer
+Group=dvd-ripper
+
+# Runtime directory for lock files (created automatically)
+RuntimeDirectory=dvd-ripper
+RuntimeDirectoryPreserve=yes
+
+# Resource limits - network transfer is I/O bound
+CPUQuota=30%
+MemoryMax=512M
+TasksMax=16
+IOWeight=100
+Nice=5
+
 # Reasonable timeout for transfer (1 hour max)
 TimeoutStartSec=1h
 
-# Nice value - lower priority than interactive processes
-Nice=5
+# Security hardening
+ProtectSystem=strict
+ProtectHome=read-only
+NoNewPrivileges=yes
+PrivateTmp=true
+PrivateDevices=true
+CapabilityBoundingSet=
+
+# Allow write access to staging and log directories
+ReadWritePaths=/var/tmp/dvd-rips /var/log/dvd-ripper.log
+
+# SSH key access for NAS transfer
+BindReadOnlyPaths=/var/lib/dvd-transfer/.ssh
 
 [Install]
 WantedBy=multi-user.target

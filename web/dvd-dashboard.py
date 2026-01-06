@@ -26,9 +26,9 @@ DASHBOARD_VERSION = "1.6.0"
 GITHUB_URL = "https://github.com/mschober/dvd-auto-ripper"
 
 LOCK_FILES = {
-    "iso": "/var/run/dvd-ripper-iso.lock",
-    "encoder": "/var/run/dvd-ripper-encoder.lock",
-    "transfer": "/var/run/dvd-ripper-transfer.lock"
+    "iso": "/run/dvd-ripper/iso.lock",
+    "encoder": "/run/dvd-ripper/encoder.lock",
+    "transfer": "/run/dvd-ripper/transfer.lock"
 }
 STATE_ORDER = ["iso-creating", "iso-ready", "encoding", "encoded-ready", "transferring", "transferred"]
 
@@ -1775,7 +1775,7 @@ ARCHITECTURE_HTML = """
 │                                                                             │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  State Files: *.iso-ready → *.encoding → *.encoded-ready → (cleanup)       │
-│  Lock Files:  /var/run/dvd-ripper-{iso,encoder,transfer}.lock              │
+│  Lock Files:  /run/dvd-ripper/{iso,encoder,transfer}.lock                  │
 └─────────────────────────────────────────────────────────────────────────────┘
         </pre>
     </div>
@@ -1865,7 +1865,7 @@ ARCHITECTURE_HTML = """
             <tr><td><code>/var/tmp/dvd-rips/</code></td><td>Staging directory (ISOs, MKVs, state files)</td></tr>
             <tr><td><code>/var/log/dvd-ripper.log</code></td><td>Application log file</td></tr>
             <tr><td><code>/etc/dvd-ripper.conf</code></td><td>Configuration file</td></tr>
-            <tr><td><code>/var/run/dvd-ripper-*.lock</code></td><td>Stage lock files (prevent concurrent runs)</td></tr>
+            <tr><td><code>/run/dvd-ripper/*.lock</code></td><td>Stage lock files (prevent concurrent runs)</td></tr>
             <tr><td><code>/usr/local/bin/dvd-*.sh</code></td><td>Pipeline scripts</td></tr>
         </table>
     </div>

@@ -10,15 +10,35 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=dvd-encoder
 
+# User isolation - run as dvd-encode user
+User=dvd-encode
+Group=dvd-ripper
+
+# Runtime directory for lock files (created automatically)
+RuntimeDirectory=dvd-ripper
+RuntimeDirectoryPreserve=yes
+
 # Resource limits - encoding is CPU intensive
 CPUQuota=80%
 MemoryMax=4G
+TasksMax=64
+IOWeight=30
+Nice=10
 
 # Long timeout for encoding (4 hours max)
 TimeoutStartSec=4h
 
-# Nice value - lower priority than interactive processes
-Nice=10
+# Security hardening
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=yes
+PrivateTmp=true
+PrivateDevices=true
+PrivateNetwork=true
+CapabilityBoundingSet=
+
+# Allow write access to staging and log directories
+ReadWritePaths=/var/tmp/dvd-rips /var/log/dvd-ripper.log
 
 [Install]
 WantedBy=multi-user.target

@@ -9,4 +9,4 @@
 #
 # ID_CDROM_MEDIA=1 ensures we only trigger on insert, not eject
 
-KERNEL=="sr[0-9]*", SUBSYSTEM=="block", ENV{ID_CDROM}=="1", ACTION=="change", ENV{ID_CDROM_MEDIA}=="1", RUN+="/usr/bin/systemd-run --no-block /usr/local/bin/dvd-iso.sh /dev/%k"
+KERNEL=="sr[0-9]*", SUBSYSTEM=="block", ENV{ID_CDROM}=="1", ACTION=="change", ENV{ID_CDROM_MEDIA}=="1", RUN+="/usr/bin/systemctl start --no-block dvd-iso@%k.service"

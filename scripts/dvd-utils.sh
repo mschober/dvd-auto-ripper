@@ -12,7 +12,7 @@ fi
 STAGING_DIR="${STAGING_DIR:-/var/tmp/dvd-rips}"
 LOG_FILE="${LOG_FILE:-/var/log/dvd-ripper.log}"
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
-LOCK_FILE="${LOCK_FILE:-/var/run/dvd-ripper.pid}"
+LOCK_FILE="${LOCK_FILE:-/run/dvd-ripper/dvd-ripper.pid}"
 MAX_RETRIES="${MAX_RETRIES:-3}"
 RETRY_DELAY="${RETRY_DELAY:-60}"
 DISK_USAGE_THRESHOLD="${DISK_USAGE_THRESHOLD:-80}"
@@ -452,13 +452,28 @@ transfer_to_nas() {
         return 1
     fi
 
+    # Build SSH options with identity file if configured
+    local ssh_opts=""
+    if [[ -n "${NAS_SSH_IDENTITY:-}" ]] && [[ -f "$NAS_SSH_IDENTITY" ]]; then
+        ssh_opts="-i $NAS_SSH_IDENTITY"
+        log_debug "Using SSH identity file: $NAS_SSH_IDENTITY"
+    fi
+
     while [[ $attempt -le $MAX_RETRIES ]]; do
         log_info "Transfer attempt $attempt/$MAX_RETRIES: $filename to ${NAS_USER}@${NAS_HOST}:${NAS_PATH}"
 
         if [[ "$NAS_TRANSFER_METHOD" == "rsync" ]]; then
-            rsync -avz --progress "$local_file" "${NAS_USER}@${NAS_HOST}:${NAS_PATH}/"
+            if [[ -n "$ssh_opts" ]]; then
+                rsync -avz --progress -e "ssh $ssh_opts" "$local_file" "${NAS_USER}@${NAS_HOST}:${NAS_PATH}/"
+            else
+                rsync -avz --progress "$local_file" "${NAS_USER}@${NAS_HOST}:${NAS_PATH}/"
+            fi
         else
-            scp "$local_file" "${NAS_USER}@${NAS_HOST}:${remote_path}"
+            if [[ -n "$ssh_opts" ]]; then
+                scp $ssh_opts "$local_file" "${NAS_USER}@${NAS_HOST}:${remote_path}"
+            else
+                scp "$local_file" "${NAS_USER}@${NAS_HOST}:${remote_path}"
+            fi
         fi
 
         if [[ $? -eq 0 ]]; then
@@ -466,7 +481,12 @@ transfer_to_nas() {
 
             # Verify remote file size matches
             local local_size=$(stat -c%s "$local_file")
-            local remote_size=$(ssh "${NAS_USER}@${NAS_HOST}" "stat -c%s \"${remote_path}\"" 2>/dev/null)
+            local remote_size
+            if [[ -n "$ssh_opts" ]]; then
+                remote_size=$(ssh $ssh_opts "${NAS_USER}@${NAS_HOST}" "stat -c%s \"${remote_path}\"" 2>/dev/null)
+            else
+                remote_size=$(ssh "${NAS_USER}@${NAS_HOST}" "stat -c%s \"${remote_path}\"" 2>/dev/null)
+            fi
 
             if [[ "$local_size" == "$remote_size" ]]; then
                 log_info "Transfer verification passed"
@@ -583,9 +603,9 @@ init_logging() {
 # ============================================================================
 
 # Default lock file paths for pipeline mode
-ISO_LOCK_FILE="${ISO_LOCK_FILE:-/var/run/dvd-ripper-iso.lock}"
-ENCODER_LOCK_FILE="${ENCODER_LOCK_FILE:-/var/run/dvd-ripper-encoder.lock}"
-TRANSFER_LOCK_FILE="${TRANSFER_LOCK_FILE:-/var/run/dvd-ripper-transfer.lock}"
+ISO_LOCK_FILE="${ISO_LOCK_FILE:-/run/dvd-ripper/iso.lock}"
+ENCODER_LOCK_FILE="${ENCODER_LOCK_FILE:-/run/dvd-ripper/encoder.lock}"
+TRANSFER_LOCK_FILE="${TRANSFER_LOCK_FILE:-/run/dvd-ripper/transfer.lock}"
 
 # Acquire stage-specific lock (non-blocking)
 # Usage: acquire_stage_lock STAGE
@@ -689,7 +709,7 @@ should_start_encoder() {
 count_active_encoders() {
     local count=0
     for i in $(seq 1 "$MAX_PARALLEL_ENCODERS"); do
-        local lock_file="/var/run/dvd-ripper-encoder-${i}.lock"
+        local lock_file="/run/dvd-ripper/encoder-${i}.lock"
         if [[ -f "$lock_file" ]]; then
             local pid=$(cat "$lock_file" 2>/dev/null)
             if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
@@ -720,7 +740,7 @@ acquire_encoder_slot() {
 
     # Try to find an available slot
     for i in $(seq 1 "$MAX_PARALLEL_ENCODERS"); do
-        local lock_file="/var/run/dvd-ripper-encoder-${i}.lock"
+        local lock_file="/run/dvd-ripper/encoder-${i}.lock"
 
         if [[ -f "$lock_file" ]]; then
             local existing_pid=$(cat "$lock_file" 2>/dev/null)
@@ -756,7 +776,7 @@ release_encoder_slot() {
         return
     fi
 
-    local lock_file="/var/run/dvd-ripper-encoder-${slot}.lock"
+    local lock_file="/run/dvd-ripper/encoder-${slot}.lock"
     if [[ -f "$lock_file" ]]; then
         rm -f "$lock_file"
         log_debug "Released encoder slot $slot"

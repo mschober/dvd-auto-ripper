@@ -53,6 +53,12 @@ NAS_TRANSFER_METHOD="rsync"
 # Example: NAS_FILE_OWNER="plex:plex"
 NAS_FILE_OWNER="plex:plex"
 
+# SSH identity file for NAS connection (v2.0 user isolation)
+# Used by the dvd-transfer user for rsync/scp/ssh commands
+# Generated automatically during installation
+# Leave empty to use default SSH key discovery
+NAS_SSH_IDENTITY="/var/lib/dvd-transfer/.ssh/id_ed25519"
+
 # ============================================================================
 # DVD Device Configuration
 # ============================================================================
@@ -109,8 +115,8 @@ LOG_LEVEL="INFO"
 # ============================================================================
 
 # Lock/PID file to prevent multiple simultaneous rips
-# /var/run requires root, /tmp works for regular users
-LOCK_FILE="/var/run/dvd-ripper.pid"
+# /run/dvd-ripper/ is created by systemd RuntimeDirectory
+LOCK_FILE="/run/dvd-ripper/dvd-ripper.pid"
 
 # ============================================================================
 # Retry Configuration
@@ -151,9 +157,9 @@ RETRY_DELAY="60"
 PIPELINE_MODE="1"
 
 # Stage-specific lock files (pipeline mode)
-ISO_LOCK_FILE="/var/run/dvd-ripper-iso.lock"
-ENCODER_LOCK_FILE="/var/run/dvd-ripper-encoder.lock"
-TRANSFER_LOCK_FILE="/var/run/dvd-ripper-transfer.lock"
+ISO_LOCK_FILE="/run/dvd-ripper/iso.lock"
+ENCODER_LOCK_FILE="/run/dvd-ripper/encoder.lock"
+TRANSFER_LOCK_FILE="/run/dvd-ripper/transfer.lock"
 
 # Cleanup settings (pipeline mode)
 # Delete local MKV after successful NAS transfer
@@ -175,8 +181,8 @@ CLEANUP_PREVIEW_AFTER_TRANSFER="0"
 # based on system load. Useful for multi-core systems with multiple DVDs queued.
 #
 # When enabled, the encoder uses numbered lock files instead of a single lock:
-#   /var/run/dvd-ripper-encoder-1.lock
-#   /var/run/dvd-ripper-encoder-2.lock
+#   /run/dvd-ripper/encoder-1.lock
+#   /run/dvd-ripper/encoder-2.lock
 #   etc.
 
 # Enable parallel encoding (0=disabled/single encoder, 1=enabled)
