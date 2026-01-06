@@ -142,7 +142,7 @@ check_dependencies() {
     print_info "Checking dependencies..."
 
     # Required dependencies
-    local deps=("HandBrakeCLI" "rsync" "ssh" "eject" "ffmpeg" "ddrescue" "python3")
+    local deps=("HandBrakeCLI" "rsync" "ssh" "eject" "ffmpeg" "ddrescue" "python3" "curl" "jq")
 
     for cmd in "${deps[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
@@ -155,10 +155,10 @@ check_dependencies() {
         print_info ""
         print_info "Install them with:"
         print_info "  Debian/Ubuntu:"
-        print_info "    sudo apt-get install handbrake-cli rsync openssh-client eject ffmpeg gddrescue"
+        print_info "    sudo apt-get install handbrake-cli rsync openssh-client eject ffmpeg gddrescue curl jq"
         print_info ""
         print_info "  RHEL/CentOS/Fedora:"
-        print_info "    sudo yum install handbrake-cli rsync openssh-clients eject ffmpeg ddrescue"
+        print_info "    sudo yum install handbrake-cli rsync openssh-clients eject ffmpeg ddrescue curl jq"
         print_info ""
         exit 1
     fi

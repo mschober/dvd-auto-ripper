@@ -135,5 +135,5 @@ cat /etc/dvd-ripper.conf
 
 ## Dependencies
 
-- handbrake-cli, gddrescue, ffmpeg, rsync, openssh-client, eject, python3-flask
+- handbrake-cli, gddrescue, ffmpeg, rsync, openssh-client, eject, python3-flask, curl, jq
 - libdvdcss (required for commercial DVDs)
