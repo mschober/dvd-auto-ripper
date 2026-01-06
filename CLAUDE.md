@@ -4,85 +4,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a DVD auto-ripper utility for Linux servers. It automatically detects DVD insertion via udev, creates an ISO backup using ddrescue, encodes to video using HandBrake, and transfers the output to a NAS/Plex server.
+DVD Auto-Ripper converts physical DVD collections into Plex-ready streaming libraries. Insert a disc, walk away, find it ready to stream.
 
-## Architecture: 3-Stage Pipeline
+**Goal**: Get dusty DVDs off the shelf and into a streamable private library.
 
-The system uses a decoupled pipeline architecture for reliability and efficiency:
+**Architecture**: 3-stage pipeline (ISO → Encode → Transfer) with queue-based processing.
 
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   Stage 1: ISO  │     │ Stage 2: Encode │     │ Stage 3: NAS    │
-│   (udev trigger)│────▶│ (15 min timer)  │────▶│ (15 min timer)  │
-│                 │     │                 │     │                 │
-│ dvd-iso.sh      │     │ dvd-encoder.sh  │     │ dvd-transfer.sh │
-│ - ddrescue ISO  │     │ - HandBrake     │     │ - rsync to NAS  │
-│ - Eject disc    │     │ - Mark ISO done │     │ - Cleanup local │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-        │                       │                       │
-        ▼                       ▼                       ▼
-  *.iso-ready             *.encoded-ready         [Complete]
-  (state file)            (state file)
-```
+See [TECHNICAL.md](./TECHNICAL.md) for detailed architecture, state files, and configuration reference.
 
-### Benefits of Pipeline Mode
-- **Drive freed immediately** - disc ejected after ISO creation (~30 min vs 2-4 hours)
-- **Resumable** - ddrescue can resume interrupted ISO creation
-- **Decoupled** - encoding/transfer failures don't affect disc operations
-- **Queue-based** - multiple ISOs can queue up for encoding
+## Key Files
 
-### Scripts
-
-| Script | Trigger | Purpose |
-|--------|---------|---------|
-| `dvd-iso.sh` | udev (disc insert) | Create ISO from DVD, eject immediately |
-| `dvd-encoder.sh` | systemd timer (15 min) | Encode ONE queued ISO to MKV |
-| `dvd-transfer.sh` | systemd timer (15 min) | Transfer ONE encoded video to NAS |
-| `dvd-ripper.sh` | manual | Legacy monolithic mode (all-in-one) |
-| `dvd-utils.sh` | sourced | Shared library functions |
-
-### State Files
-
-State files in `/var/tmp/dvd-rips/` track pipeline progress (visible suffix format):
-
-| State File | Meaning |
-|------------|---------|
-| `TITLE-TS.iso-creating` | ISO creation in progress |
-| `TITLE-TS.iso-ready` | ISO complete, waiting for encoder |
-| `TITLE-TS.encoding` | HandBrake encoding in progress |
-| `TITLE-TS.encoded-ready` | Video ready for NAS transfer |
-| `TITLE-TS.transferring` | NAS transfer in progress |
-| `*.iso.deletable` | ISO marked for cleanup after encode |
-
-### Lock Files
-
-| Lock File | Purpose |
-|-----------|---------|
-| `/var/run/dvd-ripper-iso.lock` | Stage 1: Only one ISO creation |
-| `/var/run/dvd-ripper-encoder.lock` | Stage 2: Only one encode |
-| `/var/run/dvd-ripper-transfer.lock` | Stage 3: Only one transfer |
-
-### Configuration
-
-Key settings in `/etc/dvd-ripper.conf`:
-- `PIPELINE_MODE="1"` - Enable 3-stage pipeline (default)
-- `NAS_ENABLED="1"` - Enable NAS transfer stage
-- `NAS_HOST`, `NAS_USER`, `NAS_PATH` - NAS connection details
-
-### Other Files
-
-- **config/dvd-ripper.conf.example**: Configuration template
-- **config/99-dvd-ripper.rules**: udev rule for disc detection
-- **config/dvd-encoder.timer**: systemd timer for encoding
-- **config/dvd-transfer.timer**: systemd timer for NAS transfer
-- **deploy.sh**: Deployment script for syncing to remote server
-- **remote-install.sh**: Installation script for remote server
+| File | Purpose |
+|------|---------|
+| `scripts/dvd-iso.sh` | Stage 1: Create ISO, eject disc |
+| `scripts/dvd-encoder.sh` | Stage 2: Encode to MKV |
+| `scripts/dvd-transfer.sh` | Stage 3: Transfer to NAS |
+| `scripts/dvd-utils.sh` | Shared library (~40 functions) |
+| `web/dvd-dashboard.py` | Flask dashboard |
+| `config/dvd-ripper.conf.example` | Configuration template |
 
 ## Development Workflow
 
 ### Branch Strategy
 
-Use feature branches with naming convention: `<github-username>/<branch-type>/<branch-name>`
+Use feature branches: `<github-username>/<branch-type>/<branch-name>`
 
 ```bash
 # Create feature branch
@@ -98,7 +43,7 @@ gh pr merge --squash
 
 Branch types: `feature`, `fix`, `refactor`, `docs`, `test`
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for full guidelines.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for versioning and code style.
 
 ### Making Changes
 
@@ -113,56 +58,44 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for full guidelines.
 ### Initial Server Setup
 
 ```bash
-# SSH to server (use -J <jump-host> if behind a jump box)
+# SSH to server
 ssh <user>@<server>
 
 # Install dependencies (Ubuntu/Debian)
 sudo apt update
-sudo apt install -y git handbrake-cli rsync openssh-client eject gddrescue ffmpeg
+sudo apt install -y git handbrake-cli rsync openssh-client eject gddrescue ffmpeg python3-flask
 
-# Clone the repo to /opt (standard location for third-party apps)
+# Clone and install
 sudo git clone https://github.com/mschober/dvd-auto-ripper.git /opt/dvd-auto-ripper
-
-# Run installation (--install-libdvdcss required for commercial DVDs)
 cd /opt/dvd-auto-ripper
 sudo ./remote-install.sh --install-libdvdcss
 ```
 
-### Testing
+## Testing
 
-Manual testing (pipeline mode):
+### Manual Pipeline Test
+
 ```bash
-# On remote server - test each stage
-sudo /usr/local/bin/dvd-iso.sh /dev/sr0      # Stage 1: Create ISO
-sudo systemctl start dvd-encoder.service      # Stage 2: Encode
-sudo systemctl start dvd-transfer.service     # Stage 3: Transfer
+# Stage 1: Create ISO
+sudo /usr/local/bin/dvd-iso.sh /dev/sr0
 
-# Monitor progress
+# Stage 2: Encode (or wait for timer)
+sudo systemctl start dvd-encoder.service
+
+# Stage 3: Transfer (or wait for timer)
+sudo systemctl start dvd-transfer.service
+
+# Monitor
 tail -f /var/log/dvd-ripper.log
 ```
 
-Legacy monolithic mode (if needed):
-```bash
-sudo /usr/local/bin/dvd-ripper.sh /dev/sr0
-```
-
-### Deployment
+### Check Queue Status
 
 ```bash
-# From local machine - commit and push changes
-git add -A && git commit -m "Your message" && git push
-
-# On remote server
-ssh <user>@<server> 'cd /opt/dvd-auto-ripper && sudo git pull && sudo ./remote-install.sh'
+ls -la /var/tmp/dvd-rips/*.iso-ready       # Pending encodes
+ls -la /var/tmp/dvd-rips/*.encoded-ready   # Pending transfers
+ls -la /var/tmp/dvd-rips/*.transferred     # Completed
 ```
-
-## Dependencies
-
-- HandBrake CLI (handbrake-cli)
-- rsync
-- openssh-client
-- eject
-- bash 4.0+
 
 ## Common Tasks
 
@@ -172,36 +105,35 @@ ssh <user>@<server> 'cd /opt/dvd-auto-ripper && sudo git pull && sudo ./remote-i
 # View logs
 tail -f /var/log/dvd-ripper.log
 
-# Check timer status
+# Check timers
 systemctl list-timers | grep dvd
 
-# Check queue status
-ls -la /var/tmp/dvd-rips/*.iso-ready       # Pending encodes
-ls -la /var/tmp/dvd-rips/*.encoded-ready   # Pending transfers
-ls -la /var/tmp/dvd-rips/*.iso.deletable   # ISOs awaiting cleanup
+# Dashboard
+open http://<server>:5000
 ```
 
 ### Manual Triggers
 
 ```bash
-# Manually trigger stages
 sudo systemctl start dvd-encoder.service   # Encode now
 sudo systemctl start dvd-transfer.service  # Transfer now
-
-# Test ISO creation with a DVD
-sudo /usr/local/bin/dvd-iso.sh /dev/sr0
 ```
 
 ### Troubleshooting
 
 ```bash
-# Check if locks are held
+# Check locks
 ls -la /var/run/dvd-ripper-*.lock
 
-# View systemd journal for specific service
+# Service logs
 journalctl -u dvd-encoder.service -f
 journalctl -u dvd-transfer.service -f
 
-# Check config
-sudo cat /etc/dvd-ripper.conf
+# Config
+cat /etc/dvd-ripper.conf
 ```
+
+## Dependencies
+
+- handbrake-cli, gddrescue, ffmpeg, rsync, openssh-client, eject, python3-flask
+- libdvdcss (required for commercial DVDs)
