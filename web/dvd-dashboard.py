@@ -21,7 +21,7 @@ STAGING_DIR = os.environ.get("STAGING_DIR", "/var/tmp/dvd-rips")
 LOG_FILE = os.environ.get("LOG_FILE", "/var/log/dvd-ripper.log")
 CONFIG_FILE = os.environ.get("CONFIG_FILE", "/etc/dvd-ripper.conf")
 PIPELINE_VERSION_FILE = os.environ.get("PIPELINE_VERSION_FILE", "/usr/local/bin/VERSION")
-DASHBOARD_VERSION = "1.2.0"
+DASHBOARD_VERSION = "1.3.0"
 GITHUB_URL = "https://github.com/mschober/dvd-auto-ripper"
 
 LOCK_FILES = {
@@ -143,6 +143,69 @@ def get_lock_status():
         else:
             status[stage] = {"active": False, "pid": None}
     return status
+
+
+def get_active_progress():
+    """
+    Parse recent logs to extract progress for active processes.
+    Returns dict with progress info for iso, encoder, and transfer stages.
+    """
+    progress = {"iso": None, "encoder": None, "transfer": None}
+    locks = get_lock_status()
+
+    # Only parse if something is actually running
+    if not any(s["active"] for s in locks.values()):
+        return progress
+
+    # Read more lines to catch progress updates
+    logs = get_recent_logs(200)
+
+    # Parse HandBrake encoding progress
+    # Pattern: "Encoding: task X of Y, XX.XX % (XX.XX fps, avg XX.XX fps, ETA XXhXXmXXs)"
+    if locks.get("encoder", {}).get("active"):
+        # Find all encoding lines and get the most recent one
+        encoder_matches = re.findall(
+            r'Encoding:.*?(\d+\.?\d*)\s*%.*?(\d+\.?\d*)\s*fps.*?ETA\s*(\d+h\d+m\d+s|\d+m\d+s)',
+            logs
+        )
+        if encoder_matches:
+            last_match = encoder_matches[-1]
+            progress["encoder"] = {
+                "percent": float(last_match[0]),
+                "speed": f"{last_match[1]} fps",
+                "eta": last_match[2]
+            }
+
+    # Parse ddrescue ISO creation progress
+    # Pattern: "pct rescued:  XX.XX%, read errors:        0,  remaining time:         Xm"
+    if locks.get("iso", {}).get("active"):
+        iso_matches = re.findall(
+            r'pct rescued:\s*(\d+\.?\d*)%.*?remaining time:\s*(\d+m|\d+s|n/a)',
+            logs
+        )
+        if iso_matches:
+            last_match = iso_matches[-1]
+            progress["iso"] = {
+                "percent": float(last_match[0]),
+                "eta": last_match[1] if last_match[1] != "n/a" else "finishing..."
+            }
+
+    # Parse rsync transfer progress
+    # Pattern: "XX% XX.XXMB/s X:XX:XX" or "XXX,XXX,XXX  XX%  XX.XXmB/s    X:XX:XX"
+    if locks.get("transfer", {}).get("active"):
+        transfer_matches = re.findall(
+            r'(\d+)%\s+([\d.]+[KMG]?B/s)\s+(\d+:\d+:\d+)',
+            logs
+        )
+        if transfer_matches:
+            last_match = transfer_matches[-1]
+            progress["transfer"] = {
+                "percent": float(last_match[0]),
+                "speed": last_match[1],
+                "eta": last_match[2]
+            }
+
+    return progress
 
 
 def read_config():
@@ -639,6 +702,16 @@ DASHBOARD_HTML = """
         .lock-active { background: #10b981; animation: pulse 2s infinite; }
         .lock-idle { background: #d1d5db; }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .progress-section { margin-top: 16px; }
+        .progress-item { margin-bottom: 12px; }
+        .progress-header { display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 13px; }
+        .progress-label { font-weight: 500; }
+        .progress-stats { color: #666; }
+        .progress-bar { background: #e5e7eb; height: 8px; border-radius: 4px; overflow: hidden; }
+        .progress-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+        .progress-iso { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+        .progress-encoder { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
+        .progress-transfer { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
         .queue-empty { color: #666; font-style: italic; padding: 20px 0; }
         a { color: #3b82f6; text-decoration: none; }
         a:hover { text-decoration: underline; }
@@ -718,6 +791,44 @@ DASHBOARD_HTML = """
                 </div>
                 {% endfor %}
             </div>
+            <div class="progress-section" id="progress-section">
+                {% if progress.iso %}
+                <div class="progress-item">
+                    <div class="progress-header">
+                        <span class="progress-label">ISO Creation</span>
+                        <span class="progress-stats">{{ "%.1f"|format(progress.iso.percent) }}% | ETA: {{ progress.iso.eta }}</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill progress-iso" style="width: {{ progress.iso.percent }}%"></div>
+                    </div>
+                </div>
+                {% endif %}
+                {% if progress.encoder %}
+                <div class="progress-item">
+                    <div class="progress-header">
+                        <span class="progress-label">Encoding</span>
+                        <span class="progress-stats">{{ "%.1f"|format(progress.encoder.percent) }}% | {{ progress.encoder.speed }} | ETA: {{ progress.encoder.eta }}</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill progress-encoder" style="width: {{ progress.encoder.percent }}%"></div>
+                    </div>
+                </div>
+                {% endif %}
+                {% if progress.transfer %}
+                <div class="progress-item">
+                    <div class="progress-header">
+                        <span class="progress-label">Transfer</span>
+                        <span class="progress-stats">{{ "%.1f"|format(progress.transfer.percent) }}% | {{ progress.transfer.speed }} | ETA: {{ progress.transfer.eta }}</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill progress-transfer" style="width: {{ progress.transfer.percent }}%"></div>
+                    </div>
+                </div>
+                {% endif %}
+                {% if not progress.iso and not progress.encoder and not progress.transfer %}
+                <p style="color: #666; font-size: 13px; margin: 12px 0 0 0;">No active operations</p>
+                {% endif %}
+            </div>
         </div>
     </div>
 
@@ -761,9 +872,72 @@ DASHBOARD_HTML = """
             </a>
         </p>
         <p style="margin-top: 4px;">
-            Auto-refreshes every 30 seconds. Last update: {{ now }}
+            Auto-refreshes every 30 seconds. Progress updates every 10 seconds. Last update: {{ now }}
         </p>
     </div>
+
+    <script>
+    // Auto-refresh progress bars every 10 seconds
+    function updateProgress() {
+        fetch('/api/progress')
+            .then(response => response.json())
+            .then(data => {
+                const section = document.getElementById('progress-section');
+                if (!section) return;
+
+                let html = '';
+
+                if (data.iso) {
+                    html += `
+                        <div class="progress-item">
+                            <div class="progress-header">
+                                <span class="progress-label">ISO Creation</span>
+                                <span class="progress-stats">${data.iso.percent.toFixed(1)}% | ETA: ${data.iso.eta}</span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-fill progress-iso" style="width: ${data.iso.percent}%"></div>
+                            </div>
+                        </div>`;
+                }
+
+                if (data.encoder) {
+                    html += `
+                        <div class="progress-item">
+                            <div class="progress-header">
+                                <span class="progress-label">Encoding</span>
+                                <span class="progress-stats">${data.encoder.percent.toFixed(1)}% | ${data.encoder.speed} | ETA: ${data.encoder.eta}</span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-fill progress-encoder" style="width: ${data.encoder.percent}%"></div>
+                            </div>
+                        </div>`;
+                }
+
+                if (data.transfer) {
+                    html += `
+                        <div class="progress-item">
+                            <div class="progress-header">
+                                <span class="progress-label">Transfer</span>
+                                <span class="progress-stats">${data.transfer.percent.toFixed(1)}% | ${data.transfer.speed} | ETA: ${data.transfer.eta}</span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-fill progress-transfer" style="width: ${data.transfer.percent}%"></div>
+                            </div>
+                        </div>`;
+                }
+
+                if (!data.iso && !data.encoder && !data.transfer) {
+                    html = '<p style="color: #666; font-size: 13px; margin: 12px 0 0 0;">No active operations</p>';
+                }
+
+                section.innerHTML = html;
+            })
+            .catch(err => console.log('Progress update failed:', err));
+    }
+
+    // Update progress every 10 seconds
+    setInterval(updateProgress, 10000);
+    </script>
 </body>
 </html>
 """
@@ -1579,6 +1753,7 @@ def dashboard():
         queue=get_queue_items(),
         disk=get_disk_usage(),
         locks=get_lock_status(),
+        progress=get_active_progress(),
         logs=get_recent_logs(30),
         now=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         message=message,
@@ -1701,6 +1876,12 @@ def api_config():
 def api_locks():
     """API: Get lock status."""
     return jsonify(get_lock_status())
+
+
+@app.route("/api/progress")
+def api_progress():
+    """API: Get real-time progress for active processes."""
+    return jsonify(get_active_progress())
 
 
 @app.route("/api/trigger/<stage>", methods=["POST"])
