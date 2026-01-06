@@ -460,6 +460,10 @@ install_config() {
         # Merge configs
         merge_config "$config_file" "$config_source" "$config_file"
 
+        # Ensure correct permissions for dashboard access
+        chmod 660 "$config_file"
+        chown root:dvd-ripper "$config_file"
+
         print_info "✓ Configuration merged: $config_file"
         return
     fi
@@ -471,6 +475,10 @@ install_config() {
         local backup_file="${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
         cp "$config_file" "$backup_file"
         print_info "✓ Backed up existing configuration to: $backup_file"
+
+        # Ensure correct permissions for dashboard access
+        chmod 660 "$config_file"
+        chown root:dvd-ripper "$config_file"
 
         print_warn "Keeping existing configuration (not overwriting)"
         print_warn "Use --force-config to overwrite, or --merge-config to add new settings"
@@ -487,10 +495,10 @@ install_config() {
 
     # Install new config
     cp "$config_source" "$config_file"
-    chmod 640 "$config_file"
+    chmod 660 "$config_file"
     chown root:dvd-ripper "$config_file"
 
-    print_info "✓ Configuration installed to: $config_file (mode 640, group dvd-ripper)"
+    print_info "✓ Configuration installed to: $config_file (mode 660, group dvd-ripper)"
     print_warn ""
     print_warn "*** YOU MUST EDIT THIS FILE TO SET YOUR NAS DETAILS ***"
     print_warn "    sudo nano $config_file"
