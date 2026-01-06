@@ -466,7 +466,7 @@ transfer_to_nas() {
 
             # Verify remote file size matches
             local local_size=$(stat -c%s "$local_file")
-            local remote_size=$(ssh "${NAS_USER}@${NAS_HOST}" "stat -c%s ${remote_path}" 2>/dev/null)
+            local remote_size=$(ssh "${NAS_USER}@${NAS_HOST}" "stat -c%s \"${remote_path}\"" 2>/dev/null)
 
             if [[ "$local_size" == "$remote_size" ]]; then
                 log_info "Transfer verification passed"
