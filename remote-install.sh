@@ -542,46 +542,14 @@ install_udev_rule() {
 install_web_dashboard() {
     print_info "Installing web dashboard..."
 
-    local dashboard_source="$SCRIPT_DIR/web/dvd-dashboard.py"
-    local service_source="$SCRIPT_DIR/config/dvd-dashboard.service"
-    local systemd_dir="/etc/systemd/system"
+    local install_script="$SCRIPT_DIR/scripts/dvd-dashboard-install.sh"
 
-    # Check if dashboard exists
-    if [[ ! -f "$dashboard_source" ]]; then
-        print_warn "Web dashboard not found at $dashboard_source, skipping"
-        return
-    fi
-
-    # Check if Flask is installed
-    if ! python3 -c "import flask" 2>/dev/null; then
-        print_info "Installing Flask..."
-        if command -v apt-get &>/dev/null; then
-            apt-get install -y python3-flask >/dev/null 2>&1 || pip3 install flask
-        elif command -v pip3 &>/dev/null; then
-            pip3 install flask
-        else
-            print_warn "Cannot install Flask - please install manually: pip3 install flask"
-            return
-        fi
-    fi
-
-    # Install dashboard script
-    cp "$dashboard_source" "$INSTALL_BIN/dvd-dashboard.py"
-    chmod 755 "$INSTALL_BIN/dvd-dashboard.py"
-
-    # Install systemd service
-    if [[ -f "$service_source" ]]; then
-        cp "$service_source" "$systemd_dir/"
-        chmod 644 "$systemd_dir/dvd-dashboard.service"
-        systemctl daemon-reload
-        systemctl enable dvd-dashboard.service
-        systemctl restart dvd-dashboard.service
-
-        # Get dashboard version
-        local dashboard_version=$(grep -oP 'DASHBOARD_VERSION = "\K[^"]+' "$dashboard_source" 2>/dev/null || echo "unknown")
-        print_info "✓ Web dashboard v${dashboard_version} installed and started"
+    # Check if dedicated install script exists
+    if [[ -f "$install_script" ]]; then
+        # Delegate to dedicated install script
+        bash "$install_script" "$SCRIPT_DIR"
     else
-        print_warn "dvd-dashboard.service not found, skipping systemd integration"
+        print_warn "Dashboard install script not found at $install_script, skipping"
     fi
 }
 
