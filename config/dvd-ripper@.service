@@ -34,14 +34,11 @@ Restart=no
 
 # Security hardening
 # Note: Using 'true' instead of 'strict' to avoid mount namespace issues
+# Note: DVD access requires some capabilities for eject/ioctl operations
 ProtectSystem=true
 ProtectHome=true
 NoNewPrivileges=yes
 PrivateTmp=true
-CapabilityBoundingSet=
-
-# Allow DVD device access
-DeviceAllow=/dev/sr* rw
 
 [Install]
 WantedBy=multi-user.target
