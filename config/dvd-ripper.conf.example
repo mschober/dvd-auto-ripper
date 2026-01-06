@@ -47,6 +47,12 @@ NAS_PATH=""
 # rsync is recommended for resume capability and progress tracking
 NAS_TRANSFER_METHOD="rsync"
 
+# File ownership after transfer (user:group)
+# After transfer, files are chown'd to this owner on the NAS
+# Set to empty string to skip ownership change
+# Example: NAS_FILE_OWNER="plex:plex"
+NAS_FILE_OWNER="plex:plex"
+
 # ============================================================================
 # DVD Device Configuration
 # ============================================================================

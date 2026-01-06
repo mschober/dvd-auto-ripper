@@ -13,6 +13,7 @@ source "${SCRIPT_DIR}/dvd-utils.sh"
 
 # Configuration (overridden by config file)
 NAS_ENABLED="${NAS_ENABLED:-0}"
+NAS_FILE_OWNER="${NAS_FILE_OWNER:-plex:plex}"
 CLEANUP_MKV_AFTER_TRANSFER="${CLEANUP_MKV_AFTER_TRANSFER:-1}"
 CLEANUP_ISO_AFTER_TRANSFER="${CLEANUP_ISO_AFTER_TRANSFER:-1}"
 
@@ -65,6 +66,17 @@ transfer_video() {
     # Perform transfer
     if transfer_to_nas "$mkv_path"; then
         log_info "[TRANSFER] Transfer successful"
+
+        # Change ownership on remote if configured
+        if [[ -n "$NAS_FILE_OWNER" ]]; then
+            local remote_file="${NAS_PATH}/$(basename "$mkv_path")"
+            log_info "[TRANSFER] Setting ownership to $NAS_FILE_OWNER on remote"
+            if ssh "${NAS_USER}@${NAS_HOST}" "chown $NAS_FILE_OWNER \"$remote_file\"" 2>/dev/null; then
+                log_info "[TRANSFER] Ownership set successfully"
+            else
+                log_warn "[TRANSFER] Failed to set ownership (continuing anyway)"
+            fi
+        fi
 
         # Cleanup local MKV if configured
         if [[ "$CLEANUP_MKV_AFTER_TRANSFER" == "1" ]]; then
