@@ -21,7 +21,7 @@ STAGING_DIR = os.environ.get("STAGING_DIR", "/var/tmp/dvd-rips")
 LOG_FILE = os.environ.get("LOG_FILE", "/var/log/dvd-ripper.log")
 CONFIG_FILE = os.environ.get("CONFIG_FILE", "/etc/dvd-ripper.conf")
 PIPELINE_VERSION_FILE = os.environ.get("PIPELINE_VERSION_FILE", "/usr/local/bin/VERSION")
-DASHBOARD_VERSION = "1.1.0"
+DASHBOARD_VERSION = "1.2.0"
 GITHUB_URL = "https://github.com/mschober/dvd-auto-ripper"
 
 LOCK_FILES = {
@@ -316,6 +316,31 @@ def get_all_timer_status():
             **status
         })
     return timers
+
+
+def get_udev_trigger_status():
+    """Get status of the udev disc detection trigger."""
+    udev_rule = "/etc/udev/rules.d/99-dvd-ripper.rules"
+    udev_disabled = f"{udev_rule}.disabled"
+
+    if os.path.exists(udev_rule):
+        return {
+            "enabled": True,
+            "status": "active",
+            "message": "Disc insertion triggers ISO creation"
+        }
+    elif os.path.exists(udev_disabled):
+        return {
+            "enabled": False,
+            "status": "paused",
+            "message": "Disc detection paused (rule disabled)"
+        }
+    else:
+        return {
+            "enabled": False,
+            "status": "missing",
+            "message": "Udev rule not installed"
+        }
 
 
 def control_service(service_name, action):
@@ -1485,6 +1510,47 @@ STATUS_HTML = """
                 <strong>Disable</strong> = permanently stop timer (survives reboot)
             </p>
         </div>
+
+        <div class="card">
+            <h2>Disc Detection (udev)</h2>
+            <table>
+                <tr>
+                    <th>Trigger</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+                <tr>
+                    <td>
+                        <span class="status-dot {% if udev_trigger.enabled %}status-active{% elif udev_trigger.status == 'missing' %}status-unknown{% else %}status-inactive{% endif %}"></span>
+                        <strong>DVD Insert Detection</strong>
+                        <div class="meta">99-dvd-ripper.rules</div>
+                    </td>
+                    <td>
+                        <span class="badge {% if udev_trigger.enabled %}badge-active{% elif udev_trigger.status == 'missing' %}badge-disabled{% else %}badge-inactive{% endif %}">
+                            {{ udev_trigger.status }}
+                        </span>
+                        <div class="meta">{{ udev_trigger.message }}</div>
+                    </td>
+                    <td>
+                        {% if udev_trigger.status != 'missing' %}
+                        <form method="POST" action="/api/udev/{% if udev_trigger.enabled %}pause{% else %}resume{% endif %}" style="display:inline">
+                            {% if udev_trigger.enabled %}
+                            <button class="btn btn-pause" type="submit">Pause</button>
+                            {% else %}
+                            <button class="btn btn-unpause" type="submit">Resume</button>
+                            {% endif %}
+                        </form>
+                        {% else %}
+                        <span class="meta">Run remote-install.sh to install</span>
+                        {% endif %}
+                    </td>
+                </tr>
+            </table>
+            <p class="refresh-note">
+                <strong>Pause</strong> = disable disc detection for manual operations<br>
+                <strong>Resume</strong> = re-enable automatic disc detection
+            </p>
+        </div>
     </div>
 
     <div class="footer">
@@ -1582,6 +1648,7 @@ def status_page():
         STATUS_HTML,
         services=get_all_service_status(),
         timers=get_all_timer_status(),
+        udev_trigger=get_udev_trigger_status(),
         message=message,
         message_type=message_type,
         pipeline_version=get_pipeline_version(),
@@ -1781,6 +1848,54 @@ def api_control_timer(name):
     # JSON response for API calls
     if success:
         return jsonify({"status": "ok", "timer": name, "action": action})
+    else:
+        return jsonify({"error": message}), 500
+
+
+@app.route("/api/udev/<action>", methods=["POST"])
+def api_control_udev(action):
+    """API: Pause or resume the udev disc detection trigger."""
+    if action not in ["pause", "resume"]:
+        return jsonify({"error": "Invalid action. Use 'pause' or 'resume'"}), 400
+
+    # Use the existing shell scripts for pause/resume
+    script = f"/usr/local/bin/dvd-ripper-trigger-{action}.sh"
+
+    try:
+        result = subprocess.run(
+            [script],
+            capture_output=True, text=True, timeout=10
+        )
+        success = result.returncode == 0
+        message = result.stdout.strip() or result.stderr.strip()
+    except FileNotFoundError:
+        success = False
+        message = f"Script not found: {script}"
+    except subprocess.TimeoutExpired:
+        success = False
+        message = "Command timed out"
+    except Exception as e:
+        success = False
+        message = str(e)
+
+    # Human-readable action descriptions
+    action_desc = "paused" if action == "pause" else "resumed"
+
+    # If called from form, redirect back to status page
+    if request.headers.get("Accept", "").startswith("text/html") or \
+       request.content_type != "application/json":
+        if success:
+            return redirect(url_for("status_page",
+                                    message=f"Disc detection {action_desc}",
+                                    type="success"))
+        else:
+            return redirect(url_for("status_page",
+                                    message=f"Failed to {action} disc detection: {message}",
+                                    type="error"))
+
+    # JSON response for API calls
+    if success:
+        return jsonify({"status": "ok", "action": action, "message": message})
     else:
         return jsonify({"error": message}), 500
 
