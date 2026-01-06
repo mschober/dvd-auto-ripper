@@ -33,15 +33,15 @@ TimeoutStopSec=30
 Restart=no
 
 # Security hardening
-ProtectSystem=strict
+# Note: Using 'true' instead of 'strict' to avoid mount namespace issues
+ProtectSystem=true
 ProtectHome=true
 NoNewPrivileges=yes
 PrivateTmp=true
 CapabilityBoundingSet=
 
-# Allow DVD device access and write to staging/log
+# Allow DVD device access
 DeviceAllow=/dev/sr* rw
-ReadWritePaths=/var/tmp/dvd-rips /var/log/dvd-ripper.log
 
 [Install]
 WantedBy=multi-user.target
