@@ -16,7 +16,9 @@ Group=dvd-ripper
 SupplementaryGroups=cdrom
 
 # Runtime directory for lock files (created automatically)
+# Mode 0775 allows all dvd-ripper group members to write lock files
 RuntimeDirectory=dvd-ripper
+RuntimeDirectoryMode=0775
 RuntimeDirectoryPreserve=yes
 
 # Resource limits

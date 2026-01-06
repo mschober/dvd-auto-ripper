@@ -637,6 +637,7 @@ acquire_stage_lock() {
     fi
 
     echo "$$" > "$lock_file"
+    chmod 664 "$lock_file" 2>/dev/null  # Group-writable for multi-user access
     log_debug "Acquired $stage lock with PID $$"
     return 0
 }
@@ -756,6 +757,7 @@ acquire_encoder_slot() {
 
         # Try to claim this slot
         echo "$$" > "$lock_file"
+        chmod 664 "$lock_file" 2>/dev/null  # Group-writable for multi-user access
         log_info "Acquired encoder slot $i with PID $$"
         echo "$i"
         return 0
