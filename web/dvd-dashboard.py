@@ -21,7 +21,7 @@ STAGING_DIR = os.environ.get("STAGING_DIR", "/var/tmp/dvd-rips")
 LOG_FILE = os.environ.get("LOG_FILE", "/var/log/dvd-ripper.log")
 CONFIG_FILE = os.environ.get("CONFIG_FILE", "/etc/dvd-ripper.conf")
 PIPELINE_VERSION_FILE = os.environ.get("PIPELINE_VERSION_FILE", "/usr/local/bin/VERSION")
-DASHBOARD_VERSION = "1.4.0"
+DASHBOARD_VERSION = "1.5.0"
 GITHUB_URL = "https://github.com/mschober/dvd-auto-ripper"
 
 LOCK_FILES = {
@@ -2816,6 +2816,369 @@ def api_control_udev(action):
         return jsonify({"status": "ok", "action": action, "message": message})
     else:
         return jsonify({"error": message}), 500
+
+
+# ============================================================================
+# Cluster API Routes
+# ============================================================================
+
+def get_cluster_config():
+    """Read cluster-related configuration from config file."""
+    config = read_config()
+    return {
+        "cluster_enabled": config.get("CLUSTER_ENABLED", "0") == "1",
+        "node_name": config.get("CLUSTER_NODE_NAME", ""),
+        "peers_raw": config.get("CLUSTER_PEERS", ""),
+        "ssh_user": config.get("CLUSTER_SSH_USER", ""),
+        "remote_staging": config.get("CLUSTER_REMOTE_STAGING", "/var/tmp/dvd-rips"),
+        "transfer_mode": config.get("TRANSFER_MODE", "remote"),
+        "local_library_path": config.get("LOCAL_LIBRARY_PATH", ""),
+        "enable_parallel": config.get("ENABLE_PARALLEL_ENCODING", "0") == "1",
+        "max_parallel": int(config.get("MAX_PARALLEL_ENCODERS", "2")),
+        "load_threshold": float(config.get("ENCODER_LOAD_THRESHOLD", "0.8"))
+    }
+
+
+def parse_cluster_peers(peers_raw):
+    """Parse peer string into list of peer dicts.
+
+    Format: "name:host:port name2:host2:port2"
+    Example: "plex:192.168.1.50:5000 cart:192.168.1.34:5000"
+    """
+    peers = []
+    if not peers_raw:
+        return peers
+
+    for entry in peers_raw.split():
+        parts = entry.split(":")
+        if len(parts) >= 3:
+            peers.append({
+                "name": parts[0],
+                "host": parts[1],
+                "port": int(parts[2])
+            })
+    return peers
+
+
+def count_active_encoders():
+    """Count currently running HandBrakeCLI processes."""
+    count = 0
+    try:
+        proc = subprocess.run(
+            ["pgrep", "-c", "HandBrakeCLI"],
+            capture_output=True, text=True, timeout=5
+        )
+        if proc.returncode == 0:
+            count = int(proc.stdout.strip())
+    except Exception:
+        pass
+    return count
+
+
+def get_worker_capacity():
+    """Calculate available encoding capacity for this node."""
+    config = get_cluster_config()
+    load = get_load_average()
+    cpu_count = os.cpu_count() or 1
+    max_load = cpu_count * config["load_threshold"]
+    slots_used = count_active_encoders()
+    max_slots = config["max_parallel"] if config["enable_parallel"] else 1
+    slots_free = max(0, max_slots - slots_used)
+
+    # Count pending ISOs
+    pattern = os.path.join(STAGING_DIR, "*.iso-ready")
+    queue_depth = len(glob.glob(pattern))
+
+    # Available if: load is acceptable AND we have free slots
+    available = load["load_1m"] < max_load and slots_free > 0
+
+    return {
+        "available": available,
+        "load_1m": load["load_1m"],
+        "load_5m": load["load_5m"],
+        "max_load": round(max_load, 2),
+        "cpu_count": cpu_count,
+        "slots_total": max_slots,
+        "slots_used": slots_used,
+        "slots_free": slots_free,
+        "queue_depth": queue_depth,
+        "transfer_mode": config["transfer_mode"]
+    }
+
+
+def ping_peer(host, port, timeout=5):
+    """Check if a peer is alive and get its capacity.
+
+    Returns capacity dict on success, None on failure.
+    """
+    import urllib.request
+    import urllib.error
+
+    url = f"http://{host}:{port}/api/worker/capacity"
+    try:
+        req = urllib.request.Request(url, method='GET')
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            return data
+    except Exception:
+        return None
+
+
+def get_all_peer_status():
+    """Get status of all configured peers."""
+    config = get_cluster_config()
+    peers = parse_cluster_peers(config["peers_raw"])
+
+    results = []
+    for peer in peers:
+        capacity = ping_peer(peer["host"], peer["port"])
+        results.append({
+            "name": peer["name"],
+            "host": peer["host"],
+            "port": peer["port"],
+            "online": capacity is not None,
+            "capacity": capacity
+        })
+    return results
+
+
+@app.route("/api/cluster/status")
+def api_cluster_status():
+    """API: Get this node's cluster configuration and status."""
+    config = get_cluster_config()
+    load = get_load_average()
+
+    return jsonify({
+        "node_name": config["node_name"],
+        "cluster_enabled": config["cluster_enabled"],
+        "transfer_mode": config["transfer_mode"],
+        "local_library_path": config["local_library_path"] if config["transfer_mode"] == "local" else None,
+        "peers": parse_cluster_peers(config["peers_raw"]),
+        "load": load,
+        "capacity": get_worker_capacity()
+    })
+
+
+@app.route("/api/cluster/peers")
+def api_cluster_peers():
+    """API: List all configured peers and their current status."""
+    config = get_cluster_config()
+
+    if not config["cluster_enabled"]:
+        return jsonify({
+            "cluster_enabled": False,
+            "peers": [],
+            "message": "Cluster mode is not enabled"
+        })
+
+    return jsonify({
+        "cluster_enabled": True,
+        "this_node": config["node_name"],
+        "peers": get_all_peer_status()
+    })
+
+
+@app.route("/api/worker/capacity")
+def api_worker_capacity():
+    """API: Get this node's current encoding capacity.
+
+    Called by peer nodes to check if we can accept work.
+    """
+    config = get_cluster_config()
+    capacity = get_worker_capacity()
+
+    return jsonify({
+        "node_name": config["node_name"],
+        **capacity
+    })
+
+
+@app.route("/api/cluster/ping", methods=["POST"])
+def api_cluster_ping():
+    """API: Health check endpoint for peer nodes.
+
+    Peers call this to verify connectivity and get basic status.
+    """
+    config = get_cluster_config()
+
+    return jsonify({
+        "status": "ok",
+        "node_name": config["node_name"],
+        "cluster_enabled": config["cluster_enabled"],
+        "timestamp": datetime.now().isoformat()
+    })
+
+
+@app.route("/api/worker/accept-job", methods=["POST"])
+def api_accept_job():
+    """API: Accept an encoding job from a peer node.
+
+    Expected JSON body:
+    {
+        "metadata": {...},  # State file metadata
+        "origin": "node_name"  # Originating node
+    }
+
+    Creates a local iso-ready state file for the encoder to pick up.
+    """
+    config = get_cluster_config()
+
+    if not config["cluster_enabled"]:
+        return jsonify({"error": "Cluster mode is not enabled"}), 400
+
+    # Check if we have capacity
+    capacity = get_worker_capacity()
+    if not capacity["available"]:
+        return jsonify({
+            "error": "No capacity available",
+            "load": capacity["load_1m"],
+            "slots_free": capacity["slots_free"]
+        }), 503
+
+    try:
+        data = request.json
+        if not data:
+            return jsonify({"error": "Missing JSON body"}), 400
+
+        metadata = data.get("metadata")
+        origin = data.get("origin", "unknown")
+
+        if not metadata:
+            return jsonify({"error": "Missing metadata in request"}), 400
+
+        # Extract required fields from metadata
+        title = metadata.get("title")
+        timestamp = metadata.get("timestamp")
+        iso_path = metadata.get("iso_path")
+
+        if not title or not timestamp:
+            return jsonify({"error": "Missing title or timestamp in metadata"}), 400
+
+        # Update ISO path to local staging directory
+        # The ISO should have been rsync'd to our staging dir
+        iso_filename = os.path.basename(iso_path) if iso_path else ""
+        local_iso_path = os.path.join(STAGING_DIR, iso_filename)
+
+        # Verify ISO exists locally
+        if not os.path.exists(local_iso_path):
+            return jsonify({
+                "error": f"ISO not found: {local_iso_path}",
+                "expected_path": local_iso_path
+            }), 404
+
+        # Update metadata with local paths and remote job markers
+        metadata["iso_path"] = local_iso_path
+        metadata["origin_node"] = origin
+        metadata["is_remote_job"] = True
+        metadata["received_at"] = datetime.now().isoformat()
+
+        # Create state file for encoder to pick up
+        state_file = f"{STAGING_DIR}/{title}-{timestamp}.iso-ready"
+
+        with open(state_file, 'w') as f:
+            json.dump(metadata, f, indent=2)
+
+        return jsonify({
+            "status": "accepted",
+            "state_file": os.path.basename(state_file),
+            "node_name": config["node_name"],
+            "queue_position": capacity["queue_depth"] + 1
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/cluster/job-complete", methods=["POST"])
+def api_job_complete():
+    """API: Notification that a distributed job has completed on a peer.
+
+    Expected JSON body:
+    {
+        "title": "Movie Title",
+        "timestamp": "123456789",
+        "mkv_path": "/path/to/encoded.mkv",
+        "success": true
+    }
+
+    Updates local state for the distributed job.
+    """
+    config = get_cluster_config()
+
+    try:
+        data = request.json
+        if not data:
+            return jsonify({"error": "Missing JSON body"}), 400
+
+        title = data.get("title")
+        timestamp = data.get("timestamp")
+        success = data.get("success", True)
+        mkv_path = data.get("mkv_path")
+
+        if not title or not timestamp:
+            return jsonify({"error": "Missing title or timestamp"}), 400
+
+        # Find the distributed state file
+        pattern = f"{title}-{timestamp}.distributed-to-*"
+        matches = glob.glob(os.path.join(STAGING_DIR, pattern))
+
+        if not matches:
+            return jsonify({
+                "status": "ok",
+                "message": "No matching distributed state file found (may have been cleaned up)"
+            })
+
+        state_file = matches[0]
+
+        if success:
+            # Read existing metadata and update
+            try:
+                with open(state_file, 'r') as f:
+                    metadata = json.load(f)
+            except:
+                metadata = {}
+
+            metadata["mkv_path"] = mkv_path
+            metadata["remote_completed_at"] = datetime.now().isoformat()
+
+            # Transition to encoded-ready
+            new_state_file = f"{STAGING_DIR}/{title}-{timestamp}.encoded-ready"
+            with open(new_state_file, 'w') as f:
+                json.dump(metadata, f, indent=2)
+
+            os.remove(state_file)
+
+            return jsonify({
+                "status": "ok",
+                "message": "State updated to encoded-ready",
+                "state_file": os.path.basename(new_state_file)
+            })
+        else:
+            # Job failed, return to iso-ready for local retry
+            try:
+                with open(state_file, 'r') as f:
+                    metadata = json.load(f)
+            except:
+                metadata = {}
+
+            metadata["remote_failed_at"] = datetime.now().isoformat()
+            metadata.pop("is_remote_job", None)
+            metadata.pop("origin_node", None)
+
+            new_state_file = f"{STAGING_DIR}/{title}-{timestamp}.iso-ready"
+            with open(new_state_file, 'w') as f:
+                json.dump(metadata, f, indent=2)
+
+            os.remove(state_file)
+
+            return jsonify({
+                "status": "ok",
+                "message": "State reverted to iso-ready for local retry",
+                "state_file": os.path.basename(new_state_file)
+            })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================================

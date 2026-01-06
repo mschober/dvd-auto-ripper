@@ -195,6 +195,46 @@ MAX_PARALLEL_ENCODERS="2"
 ENCODER_LOAD_THRESHOLD="0.8"
 
 # ============================================================================
+# Transfer Mode Configuration
+# ============================================================================
+# Control how encoded videos are transferred to their final destination.
+# "remote" = rsync/scp to NAS (existing behavior, uses NAS_HOST settings)
+# "local"  = move file to local path (for machines that ARE the media server)
+
+# Transfer mode: "remote" or "local"
+TRANSFER_MODE="remote"
+
+# For local mode: destination path for encoded videos
+# Only used when TRANSFER_MODE="local"
+# Example for Plex: "/volume1/media/movies" or "/mnt/plex/Movies"
+LOCAL_LIBRARY_PATH=""
+
+# ============================================================================
+# Cluster Configuration
+# ============================================================================
+# Enable distributed encoding across multiple machines. Each machine in the
+# cluster can rip DVDs and/or encode. When one machine is busy, it can send
+# ISOs to peers for encoding.
+#
+# Requires: SSH key auth between cluster nodes, same software on all nodes
+
+# Enable cluster mode (0=standalone, 1=cluster member)
+CLUSTER_ENABLED="0"
+
+# This machine's hostname/identifier in cluster
+CLUSTER_NODE_NAME=""
+
+# Peer nodes (space-separated "name:host:port" entries)
+# Example: "plex:192.168.1.50:5000 cart:192.168.1.34:5000"
+CLUSTER_PEERS=""
+
+# SSH user for rsync transfers between cluster nodes
+CLUSTER_SSH_USER=""
+
+# Remote staging directory on peer nodes (where ISOs are sent)
+CLUSTER_REMOTE_STAGING="/var/tmp/dvd-rips"
+
+# ============================================================================
 # Preview Generation Configuration
 # ============================================================================
 # Previews are short video clips extracted during encoding to help identify

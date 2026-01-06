@@ -874,6 +874,203 @@ parse_json_field() {
     echo "$metadata" | grep -oP "\"$field\":\s*\"?\K[^\",$}]+" | head -1
 }
 
+# ============================================================================
+# Cluster Mode: Distributed Encoding Support
+# ============================================================================
+
+# Default cluster configuration
+CLUSTER_ENABLED="${CLUSTER_ENABLED:-0}"
+CLUSTER_NODE_NAME="${CLUSTER_NODE_NAME:-}"
+CLUSTER_PEERS="${CLUSTER_PEERS:-}"
+CLUSTER_SSH_USER="${CLUSTER_SSH_USER:-}"
+CLUSTER_REMOTE_STAGING="${CLUSTER_REMOTE_STAGING:-/var/tmp/dvd-rips}"
+
+# Check if we should distribute a job to a peer node
+# Returns: 0 if should distribute, 1 if should encode locally
+# Logic: Distribute if local load is high AND queue has multiple items
+should_distribute_job() {
+    # Only consider distribution if cluster is enabled
+    if [[ "$CLUSTER_ENABLED" != "1" ]]; then
+        return 1
+    fi
+
+    # Check if we have peers configured
+    if [[ -z "$CLUSTER_PEERS" ]]; then
+        log_debug "[CLUSTER] No peers configured"
+        return 1
+    fi
+
+    # Get current load info
+    local load_1m=$(get_load_average)
+    local cpu_count=$(get_cpu_count)
+    local threshold=$(awk "BEGIN {printf \"%.2f\", $cpu_count * $ENCODER_LOAD_THRESHOLD}")
+
+    # Check if load is above threshold
+    local is_busy=$(awk "BEGIN {print ($load_1m >= $threshold) ? 1 : 0}")
+
+    # Check queue depth
+    local queue_depth=$(count_pending_state "iso-ready")
+
+    log_debug "[CLUSTER] Load: $load_1m, Threshold: $threshold, Queue: $queue_depth"
+
+    # Only distribute if busy AND queue has multiple items
+    if [[ "$is_busy" == "1" ]] && [[ "$queue_depth" -gt 1 ]]; then
+        log_info "[CLUSTER] Local load high ($load_1m >= $threshold), considering distribution"
+        return 0
+    fi
+
+    return 1
+}
+
+# Query a peer's capacity via API
+# Usage: query_peer_capacity HOST PORT
+# Returns: JSON capacity response on stdout, 0 if available, 1 if not
+query_peer_capacity() {
+    local host="$1"
+    local port="$2"
+    local timeout="${3:-5}"
+
+    local response
+    response=$(curl -s --connect-timeout "$timeout" "http://${host}:${port}/api/worker/capacity" 2>/dev/null)
+
+    if [[ $? -ne 0 ]] || [[ -z "$response" ]]; then
+        log_debug "[CLUSTER] Peer $host:$port unreachable"
+        return 1
+    fi
+
+    # Check if peer is available
+    local available=$(echo "$response" | grep -oP '"available":\s*\K(true|false)' | head -1)
+
+    if [[ "$available" == "true" ]]; then
+        echo "$response"
+        return 0
+    else
+        log_debug "[CLUSTER] Peer $host:$port not available"
+        return 1
+    fi
+}
+
+# Find an available peer with encoding capacity
+# Usage: find_available_peer
+# Returns: "name:host:port" on stdout if found, 1 if none available
+find_available_peer() {
+    if [[ -z "$CLUSTER_PEERS" ]]; then
+        return 1
+    fi
+
+    log_info "[CLUSTER] Checking peer availability..."
+
+    for peer_entry in $CLUSTER_PEERS; do
+        # Parse "name:host:port" format
+        local name=$(echo "$peer_entry" | cut -d: -f1)
+        local host=$(echo "$peer_entry" | cut -d: -f2)
+        local port=$(echo "$peer_entry" | cut -d: -f3)
+
+        if [[ -z "$host" ]] || [[ -z "$port" ]]; then
+            log_warn "[CLUSTER] Invalid peer entry: $peer_entry"
+            continue
+        fi
+
+        log_debug "[CLUSTER] Checking peer $name ($host:$port)..."
+
+        if query_peer_capacity "$host" "$port" > /dev/null; then
+            log_info "[CLUSTER] Found available peer: $name ($host:$port)"
+            echo "$peer_entry"
+            return 0
+        fi
+    done
+
+    log_info "[CLUSTER] No peers with available capacity"
+    return 1
+}
+
+# Distribute an ISO to a peer node for encoding
+# Usage: distribute_to_peer STATE_FILE PEER_ENTRY
+# PEER_ENTRY format: "name:host:port"
+# Returns: 0 on success, 1 on failure
+distribute_to_peer() {
+    local state_file="$1"
+    local peer_entry="$2"
+
+    # Parse peer entry
+    local peer_name=$(echo "$peer_entry" | cut -d: -f1)
+    local peer_host=$(echo "$peer_entry" | cut -d: -f2)
+    local peer_port=$(echo "$peer_entry" | cut -d: -f3)
+
+    # Read state metadata
+    local metadata=$(read_pipeline_state "$state_file")
+    local title=$(parse_json_field "$metadata" "title")
+    local timestamp=$(parse_json_field "$metadata" "timestamp")
+    local iso_path=$(parse_json_field "$metadata" "iso_path")
+
+    log_info "[CLUSTER] Distributing '$title' to peer $peer_name"
+
+    # Verify ISO exists
+    if [[ ! -f "$iso_path" ]]; then
+        log_error "[CLUSTER] ISO file not found: $iso_path"
+        return 1
+    fi
+
+    # Transition state to distributing
+    remove_state_file "$state_file"
+    local dist_state=$(create_pipeline_state "distributing" "$title" "$timestamp" "$metadata")
+
+    # Transfer ISO to peer via rsync
+    local remote_dest="${CLUSTER_SSH_USER}@${peer_host}:${CLUSTER_REMOTE_STAGING}/"
+    log_info "[CLUSTER] Rsync ISO to $remote_dest"
+
+    if ! rsync -avz --progress "$iso_path" "$remote_dest" >> "$LOG_FILE" 2>&1; then
+        log_error "[CLUSTER] ISO transfer to $peer_name failed"
+        # Revert state
+        remove_state_file "$dist_state"
+        create_pipeline_state "iso-ready" "$title" "$timestamp" "$metadata" > /dev/null
+        return 1
+    fi
+
+    log_info "[CLUSTER] ISO transferred to $peer_name"
+
+    # Update metadata with distribution info
+    local new_metadata=$(update_metadata_for_distribution "$metadata" "$CLUSTER_NODE_NAME" "$peer_name")
+
+    # Notify peer to start encoding via API
+    local api_url="http://${peer_host}:${peer_port}/api/worker/accept-job"
+    local api_response
+
+    api_response=$(curl -s -X POST "$api_url" \
+        -H "Content-Type: application/json" \
+        -d "{\"metadata\": $new_metadata, \"origin\": \"$CLUSTER_NODE_NAME\"}" \
+        2>/dev/null)
+
+    if [[ $? -ne 0 ]] || ! echo "$api_response" | grep -q '"status":\s*"accepted"'; then
+        log_error "[CLUSTER] Peer $peer_name did not accept job"
+        # Revert state
+        remove_state_file "$dist_state"
+        create_pipeline_state "iso-ready" "$title" "$timestamp" "$metadata" > /dev/null
+        return 1
+    fi
+
+    log_info "[CLUSTER] Peer $peer_name accepted job"
+
+    # Update state to distributed
+    remove_state_file "$dist_state"
+    create_pipeline_state "distributed-to-${peer_name}" "$title" "$timestamp" "$new_metadata" > /dev/null
+
+    log_info "[CLUSTER] Job '$title' distributed to $peer_name successfully"
+    return 0
+}
+
+# Update metadata JSON for distributed job
+# Adds origin_node and is_remote_job fields
+update_metadata_for_distribution() {
+    local metadata="$1"
+    local origin_node="$2"
+    local dest_node="$3"
+
+    # Add distribution fields to metadata
+    # Simple string manipulation (metadata is valid JSON)
+    echo "$metadata" | sed 's/}$/,\n  "origin_node": "'"$origin_node"'",\n  "dest_node": "'"$dest_node"'",\n  "is_remote_job": true\n}/'
+}
+
 # Build JSON metadata for state files
 # Usage: build_state_metadata TITLE YEAR TIMESTAMP MAIN_TITLE ISO_PATH [MKV_PATH] [PREVIEW_PATH] [NAS_PATH]
 # Returns: JSON string
