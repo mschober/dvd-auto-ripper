@@ -7,8 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2025-01-05
+
 ### Added
+- Udev trigger control in Status page (pause/resume disc detection from web UI)
+- API endpoint for udev control (`POST /api/udev/<action>`)
 - `dvd-dashboard-ctl.sh` script for start/stop/restart/status of web dashboard
+
+### Documentation
+- Complete README overhaul with Plex streaming focus
+- New TECHNICAL.md with architecture details and API reference
+- Slimmed CLAUDE.md to focus on development workflow
 
 ## [1.1.0] - 2025-01-05
 
