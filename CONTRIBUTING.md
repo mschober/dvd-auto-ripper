@@ -64,6 +64,55 @@ See [CLAUDE.md](./CLAUDE.md) for:
 - Testing procedures
 - Common tasks
 
+## Versioning
+
+This project uses [Semantic Versioning](https://semver.org/) (SemVer) with the format `MAJOR.MINOR.PATCH`:
+
+- **MAJOR**: Breaking changes (API changes, incompatible config changes)
+- **MINOR**: New features (backwards compatible)
+- **PATCH**: Bug fixes (backwards compatible)
+
+### Version Files
+
+| File | Component | Purpose |
+|------|-----------|---------|
+| `scripts/VERSION` | Pipeline scripts | Version for dvd-iso.sh, dvd-encoder.sh, dvd-transfer.sh |
+| `web/VERSION` | Dashboard | Version for web UI (also update `DASHBOARD_VERSION` in dvd-dashboard.py) |
+
+### When to Update Versions
+
+| Change Type | Version Bump | Examples |
+|-------------|--------------|----------|
+| Bug fix | PATCH (0.0.X) | Fix encoding failure, correct state handling |
+| New feature | MINOR (0.X.0) | Add status page, add preview generation |
+| Breaking change | MAJOR (X.0.0) | Change config format, rename state files |
+
+### Update Checklist
+
+**For pipeline script changes:**
+1. Update `scripts/VERSION`
+2. Commit with the feature/fix
+
+**For dashboard changes:**
+1. Update `web/VERSION`
+2. Update `DASHBOARD_VERSION` constant in `web/dvd-dashboard.py`
+3. Commit with the feature/fix
+
+**For changes affecting both:**
+1. Update both VERSION files
+2. Keep versions in sync if they share dependencies
+
+### Example
+
+Adding a new dashboard feature like the status page:
+```bash
+# Update version from 1.0.0 to 1.1.0
+echo "1.1.0" > web/VERSION
+
+# Also update the constant in dvd-dashboard.py
+# DASHBOARD_VERSION = "1.1.0"
+```
+
 ## Code Style
 
 - Bash scripts: Use `set -euo pipefail`

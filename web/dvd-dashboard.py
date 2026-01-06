@@ -21,7 +21,7 @@ STAGING_DIR = os.environ.get("STAGING_DIR", "/var/tmp/dvd-rips")
 LOG_FILE = os.environ.get("LOG_FILE", "/var/log/dvd-ripper.log")
 CONFIG_FILE = os.environ.get("CONFIG_FILE", "/etc/dvd-ripper.conf")
 PIPELINE_VERSION_FILE = os.environ.get("PIPELINE_VERSION_FILE", "/usr/local/bin/VERSION")
-DASHBOARD_VERSION = "1.0.0"
+DASHBOARD_VERSION = "1.1.0"
 GITHUB_URL = "https://github.com/mschober/dvd-auto-ripper"
 
 LOCK_FILES = {
@@ -175,6 +175,186 @@ def trigger_service(stage):
     try:
         result = subprocess.run(
             ["systemctl", "start", service_name],
+            capture_output=True, text=True, timeout=10
+        )
+        return result.returncode == 0, result.stderr.strip() or "OK"
+    except Exception as e:
+        return False, str(e)
+
+
+# ============================================================================
+# Service & Timer Status Functions
+# ============================================================================
+
+# Services and timers managed by the DVD ripper
+MANAGED_SERVICES = [
+    {"name": "dvd-dashboard", "description": "Web Dashboard"},
+    {"name": "dvd-encoder", "description": "Video Encoder (Stage 2)"},
+    {"name": "dvd-transfer", "description": "NAS Transfer (Stage 3)"},
+]
+
+MANAGED_TIMERS = [
+    {"name": "dvd-encoder", "description": "Encoder Timer (15 min)"},
+    {"name": "dvd-transfer", "description": "Transfer Timer (15 min)"},
+]
+
+
+def get_service_status(service_name):
+    """Get detailed status of a systemd service."""
+    try:
+        # Check if service is active
+        result = subprocess.run(
+            ["systemctl", "is-active", f"{service_name}.service"],
+            capture_output=True, text=True, timeout=5
+        )
+        is_active = result.stdout.strip() == "active"
+
+        # Check if service is enabled
+        result = subprocess.run(
+            ["systemctl", "is-enabled", f"{service_name}.service"],
+            capture_output=True, text=True, timeout=5
+        )
+        is_enabled = result.stdout.strip() == "enabled"
+
+        # Get more details
+        result = subprocess.run(
+            ["systemctl", "show", f"{service_name}.service",
+             "--property=ActiveState,SubState,MainPID,ExecMainStartTimestamp"],
+            capture_output=True, text=True, timeout=5
+        )
+        props = {}
+        for line in result.stdout.strip().split("\n"):
+            if "=" in line:
+                key, _, value = line.partition("=")
+                props[key] = value
+
+        return {
+            "active": is_active,
+            "enabled": is_enabled,
+            "state": props.get("ActiveState", "unknown"),
+            "substate": props.get("SubState", "unknown"),
+            "pid": props.get("MainPID", "0"),
+            "started": props.get("ExecMainStartTimestamp", ""),
+        }
+    except Exception as e:
+        return {
+            "active": False,
+            "enabled": False,
+            "state": "error",
+            "substate": str(e),
+            "pid": "0",
+            "started": "",
+        }
+
+
+def get_timer_status(timer_name):
+    """Get detailed status of a systemd timer."""
+    try:
+        # Check if timer is active
+        result = subprocess.run(
+            ["systemctl", "is-active", f"{timer_name}.timer"],
+            capture_output=True, text=True, timeout=5
+        )
+        is_active = result.stdout.strip() == "active"
+
+        # Check if timer is enabled
+        result = subprocess.run(
+            ["systemctl", "is-enabled", f"{timer_name}.timer"],
+            capture_output=True, text=True, timeout=5
+        )
+        is_enabled = result.stdout.strip() == "enabled"
+
+        # Get timer details
+        result = subprocess.run(
+            ["systemctl", "show", f"{timer_name}.timer",
+             "--property=NextElapseUSecRealtime,LastTriggerUSec"],
+            capture_output=True, text=True, timeout=5
+        )
+        props = {}
+        for line in result.stdout.strip().split("\n"):
+            if "=" in line:
+                key, _, value = line.partition("=")
+                props[key] = value
+
+        return {
+            "active": is_active,
+            "enabled": is_enabled,
+            "next_trigger": props.get("NextElapseUSecRealtime", ""),
+            "last_trigger": props.get("LastTriggerUSec", ""),
+        }
+    except Exception as e:
+        return {
+            "active": False,
+            "enabled": False,
+            "next_trigger": "",
+            "last_trigger": "",
+            "error": str(e),
+        }
+
+
+def get_all_service_status():
+    """Get status of all managed services."""
+    services = []
+    for svc in MANAGED_SERVICES:
+        status = get_service_status(svc["name"])
+        services.append({
+            "name": svc["name"],
+            "description": svc["description"],
+            **status
+        })
+    return services
+
+
+def get_all_timer_status():
+    """Get status of all managed timers."""
+    timers = []
+    for tmr in MANAGED_TIMERS:
+        status = get_timer_status(tmr["name"])
+        timers.append({
+            "name": tmr["name"],
+            "description": tmr["description"],
+            **status
+        })
+    return timers
+
+
+def control_service(service_name, action):
+    """Start, stop, or restart a systemd service."""
+    if action not in ["start", "stop", "restart"]:
+        return False, "Invalid action"
+
+    # Validate service name
+    valid_services = [s["name"] for s in MANAGED_SERVICES]
+    if service_name not in valid_services:
+        return False, "Invalid service"
+
+    # Don't allow stopping the dashboard from itself
+    if service_name == "dvd-dashboard" and action == "stop":
+        return False, "Cannot stop dashboard from web UI"
+
+    try:
+        result = subprocess.run(
+            ["systemctl", action, f"{service_name}.service"],
+            capture_output=True, text=True, timeout=10
+        )
+        return result.returncode == 0, result.stderr.strip() or "OK"
+    except Exception as e:
+        return False, str(e)
+
+
+def control_timer(timer_name, action):
+    """Start (unpause), stop (pause), enable, or disable a systemd timer."""
+    if action not in ["start", "stop", "enable", "disable"]:
+        return False, "Invalid action"
+
+    # Validate timer name
+    valid_timers = [t["name"] for t in MANAGED_TIMERS]
+    if timer_name not in valid_timers:
+        return False, "Invalid timer"
+
+    try:
+        result = subprocess.run(
+            ["systemctl", action, f"{timer_name}.timer"],
             capture_output=True, text=True, timeout=10
         )
         return result.returncode == 0, result.stderr.strip() or "OK"
@@ -547,6 +727,7 @@ DASHBOARD_HTML = """
             <a href="/architecture">Architecture</a> |
             <a href="/logs">Logs</a> |
             <a href="/config">Config</a> |
+            <a href="/status">Status</a> |
             <a href="/identify">
                 Pending ID
                 {% if pending_identification > 0 %}
@@ -1111,6 +1292,210 @@ IDENTIFY_HTML = """
 </html>
 """
 
+STATUS_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Service Status - DVD Ripper</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0; padding: 20px; background: #f0f2f5; color: #1a1a1a;
+            min-height: 100vh;
+        }
+        h1 { margin: 0 0 8px 0; }
+        h1 a { color: #3b82f6; text-decoration: none; }
+        h1 a:hover { text-decoration: underline; }
+        h2 { margin: 0 0 16px 0; font-size: 16px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+        .subtitle { color: #666; margin-bottom: 20px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #eee; }
+        th { color: #666; font-weight: 600; font-size: 12px; text-transform: uppercase; }
+        .status-dot {
+            display: inline-block;
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-active { background: #10b981; }
+        .status-inactive { background: #ef4444; }
+        .status-unknown { background: #9ca3af; }
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .badge-active { background: #d1fae5; color: #065f46; }
+        .badge-inactive { background: #fee2e2; color: #991b1b; }
+        .badge-enabled { background: #dbeafe; color: #1e40af; }
+        .badge-disabled { background: #f3f4f6; color: #6b7280; }
+        .btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+            margin-right: 4px;
+            transition: background 0.2s;
+        }
+        .btn-start { background: #10b981; color: white; }
+        .btn-start:hover { background: #059669; }
+        .btn-stop { background: #ef4444; color: white; }
+        .btn-stop:hover { background: #dc2626; }
+        .btn-restart { background: #f59e0b; color: white; }
+        .btn-restart:hover { background: #d97706; }
+        .btn-pause { background: #6b7280; color: white; }
+        .btn-pause:hover { background: #4b5563; }
+        .btn-unpause { background: #3b82f6; color: white; }
+        .btn-unpause:hover { background: #2563eb; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .flash { padding: 12px 16px; border-radius: 4px; margin-bottom: 16px; }
+        .flash-success { background: #d1fae5; color: #065f46; border: 1px solid #a7f3d0; }
+        .flash-error { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+        .meta { font-size: 12px; color: #6b7280; margin-top: 4px; }
+        .footer {
+            margin-top: 20px;
+            font-size: 12px;
+            color: #666;
+            text-align: center;
+        }
+        .footer a { color: #3b82f6; text-decoration: none; }
+        .refresh-note { font-size: 12px; color: #666; margin-top: 12px; }
+    </style>
+</head>
+<body>
+    <h1><a href="/">Dashboard</a> / Service Status</h1>
+    <p class="subtitle">Manage DVD ripper services and timers</p>
+
+    {% if message %}
+    <div class="flash flash-{{ message_type }}">{{ message }}</div>
+    {% endif %}
+
+    <div class="grid">
+        <div class="card">
+            <h2>Services</h2>
+            <table>
+                <tr>
+                    <th>Service</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+                {% for svc in services %}
+                <tr>
+                    <td>
+                        <span class="status-dot {% if svc.active %}status-active{% else %}status-inactive{% endif %}"></span>
+                        <strong>{{ svc.description }}</strong>
+                        <div class="meta">{{ svc.name }}.service</div>
+                    </td>
+                    <td>
+                        <span class="badge {% if svc.active %}badge-active{% else %}badge-inactive{% endif %}">
+                            {{ svc.state }}
+                        </span>
+                        {% if svc.active and svc.pid != "0" %}
+                        <div class="meta">PID: {{ svc.pid }}</div>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if svc.name != "dvd-dashboard" %}
+                        <form method="POST" action="/api/service/{{ svc.name }}" style="display:inline">
+                            {% if svc.active %}
+                            <input type="hidden" name="action" value="stop">
+                            <button class="btn btn-stop" type="submit">Stop</button>
+                            {% else %}
+                            <input type="hidden" name="action" value="start">
+                            <button class="btn btn-start" type="submit">Start</button>
+                            {% endif %}
+                        </form>
+                        <form method="POST" action="/api/service/{{ svc.name }}" style="display:inline">
+                            <input type="hidden" name="action" value="restart">
+                            <button class="btn btn-restart" type="submit" {% if not svc.active %}disabled{% endif %}>Restart</button>
+                        </form>
+                        {% else %}
+                        <span class="meta">Cannot control from UI</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </table>
+        </div>
+
+        <div class="card">
+            <h2>Timers (Triggers)</h2>
+            <table>
+                <tr>
+                    <th>Timer</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+                {% for tmr in timers %}
+                <tr>
+                    <td>
+                        <span class="status-dot {% if tmr.active %}status-active{% else %}status-inactive{% endif %}"></span>
+                        <strong>{{ tmr.description }}</strong>
+                        <div class="meta">{{ tmr.name }}.timer</div>
+                    </td>
+                    <td>
+                        <span class="badge {% if tmr.active %}badge-active{% else %}badge-inactive{% endif %}">
+                            {% if tmr.active %}running{% else %}paused{% endif %}
+                        </span>
+                        <span class="badge {% if tmr.enabled %}badge-enabled{% else %}badge-disabled{% endif %}">
+                            {% if tmr.enabled %}enabled{% else %}disabled{% endif %}
+                        </span>
+                        {% if tmr.next_trigger %}
+                        <div class="meta">Next: {{ tmr.next_trigger }}</div>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <form method="POST" action="/api/timer/{{ tmr.name }}" style="display:inline">
+                            {% if tmr.active %}
+                            <input type="hidden" name="action" value="stop">
+                            <button class="btn btn-pause" type="submit">Pause</button>
+                            {% else %}
+                            <input type="hidden" name="action" value="start">
+                            <button class="btn btn-unpause" type="submit">Unpause</button>
+                            {% endif %}
+                        </form>
+                        <form method="POST" action="/api/timer/{{ tmr.name }}" style="display:inline">
+                            {% if tmr.enabled %}
+                            <input type="hidden" name="action" value="disable">
+                            <button class="btn btn-stop" type="submit">Disable</button>
+                            {% else %}
+                            <input type="hidden" name="action" value="enable">
+                            <button class="btn btn-start" type="submit">Enable</button>
+                            {% endif %}
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </table>
+            <p class="refresh-note">
+                <strong>Pause</strong> = temporarily stop timer (until next reboot)<br>
+                <strong>Disable</strong> = permanently stop timer (survives reboot)
+            </p>
+        </div>
+    </div>
+
+    <div class="footer">
+        Pipeline v{{ pipeline_version }} | Dashboard v{{ dashboard_version }} |
+        <a href="{{ github_url }}" target="_blank">dvd-auto-ripper</a> |
+        <a href="/">Back to Dashboard</a>
+    </div>
+</body>
+</html>
+"""
+
 
 # ============================================================================
 # Routes
@@ -1181,6 +1566,24 @@ def identify_page():
     return render_template_string(
         IDENTIFY_HTML,
         pending=get_pending_identification(),
+        pipeline_version=get_pipeline_version(),
+        dashboard_version=DASHBOARD_VERSION,
+        github_url=GITHUB_URL
+    )
+
+
+@app.route("/status")
+def status_page():
+    """Service and timer status page."""
+    message = request.args.get("message")
+    message_type = request.args.get("type", "success")
+
+    return render_template_string(
+        STATUS_HTML,
+        services=get_all_service_status(),
+        timers=get_all_timer_status(),
+        message=message,
+        message_type=message_type,
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
         github_url=GITHUB_URL
@@ -1310,6 +1713,76 @@ def api_serve_preview(filename):
         return jsonify({"error": "Preview not found"}), 404
 
     return send_file(preview_path, mimetype='video/mp4')
+
+
+# ============================================================================
+# Service & Timer Control API Routes
+# ============================================================================
+
+@app.route("/api/service/<name>", methods=["POST"])
+def api_control_service(name):
+    """API: Start, stop, or restart a service."""
+    action = request.form.get("action") or (request.get_json() or {}).get("action")
+
+    if not action:
+        return jsonify({"error": "Action required"}), 400
+
+    success, message = control_service(name, action)
+
+    # If called from form, redirect back to status page
+    if request.headers.get("Accept", "").startswith("text/html") or \
+       request.content_type != "application/json":
+        if success:
+            return redirect(url_for("status_page",
+                                    message=f"Service {name} {action}ed successfully",
+                                    type="success"))
+        else:
+            return redirect(url_for("status_page",
+                                    message=f"Failed to {action} {name}: {message}",
+                                    type="error"))
+
+    # JSON response for API calls
+    if success:
+        return jsonify({"status": "ok", "service": name, "action": action})
+    else:
+        return jsonify({"error": message}), 500
+
+
+@app.route("/api/timer/<name>", methods=["POST"])
+def api_control_timer(name):
+    """API: Start (unpause), stop (pause), enable, or disable a timer."""
+    action = request.form.get("action") or (request.get_json() or {}).get("action")
+
+    if not action:
+        return jsonify({"error": "Action required"}), 400
+
+    success, message = control_timer(name, action)
+
+    # Human-readable action descriptions
+    action_desc = {
+        "start": "unpaused",
+        "stop": "paused",
+        "enable": "enabled",
+        "disable": "disabled"
+    }.get(action, action + "ed")
+
+    # If called from form, redirect back to status page
+    if request.headers.get("Accept", "").startswith("text/html") or \
+       request.content_type != "application/json":
+        if success:
+            return redirect(url_for("status_page",
+                                    message=f"Timer {name} {action_desc} successfully",
+                                    type="success"))
+        else:
+            return redirect(url_for("status_page",
+                                    message=f"Failed to {action} timer {name}: {message}",
+                                    type="error"))
+
+    # JSON response for API calls
+    if success:
+        return jsonify({"status": "ok", "timer": name, "action": action})
+    else:
+        return jsonify({"error": message}), 500
 
 
 # ============================================================================
