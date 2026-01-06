@@ -30,13 +30,12 @@ TimeoutStartSec=4h
 
 # Security hardening
 # Note: Using 'true' instead of 'strict' to avoid mount namespace issues
+# Note: PrivateTmp disabled - staging dir must be shared between pipeline stages
 ProtectSystem=true
 ProtectHome=true
 NoNewPrivileges=yes
-PrivateTmp=true
 PrivateDevices=true
 PrivateNetwork=true
-CapabilityBoundingSet=
 
 [Install]
 WantedBy=multi-user.target
