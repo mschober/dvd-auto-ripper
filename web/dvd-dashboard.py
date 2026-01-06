@@ -7,11 +7,12 @@ https://github.com/mschober/dvd-auto-ripper
 """
 
 import os
+import re
 import json
 import glob
 import subprocess
 from datetime import datetime
-from flask import Flask, jsonify, render_template_string, request, redirect, url_for
+from flask import Flask, jsonify, render_template_string, request, redirect, url_for, send_file
 
 app = Flask(__name__)
 
@@ -28,7 +29,22 @@ LOCK_FILES = {
     "encoder": "/var/run/dvd-ripper-encoder.lock",
     "transfer": "/var/run/dvd-ripper-transfer.lock"
 }
-STATE_ORDER = ["iso-creating", "iso-ready", "encoding", "encoded-ready", "transferring"]
+STATE_ORDER = ["iso-creating", "iso-ready", "encoding", "encoded-ready", "transferring", "transferred"]
+
+# Generic title detection patterns (items needing identification)
+GENERIC_PATTERNS = [
+    r'^DVD_\d{8}_\d{6}$',           # DVD_YYYYMMDD_HHMMSS (our fallback format)
+    r'^DVD_VIDEO$',                  # Common generic
+    r'^DVDVIDEO$',                   # Another variant
+    r'^DISC\d*$',                    # DISC, DISC1, etc.
+    r'^DISK\d*$',                    # DISK, DISK1, etc.
+    r'^VIDEO_TS$',                   # Raw folder name
+    r'^MYDVD$',                      # Generic authoring tool name
+    r'^DVD$',                        # Plain DVD
+]
+
+# States that allow renaming (not actively being processed)
+RENAMEABLE_STATES = ["iso-ready", "encoded-ready", "transferred"]
 
 
 # ============================================================================
@@ -164,6 +180,194 @@ def trigger_service(stage):
         return result.returncode == 0, result.stderr.strip() or "OK"
     except Exception as e:
         return False, str(e)
+
+
+# ============================================================================
+# Identification Helper Functions
+# ============================================================================
+
+def is_generic_title(title):
+    """Check if title appears to be generic/fallback and needs identification."""
+    if not title:
+        return True
+    upper_title = title.upper()
+    for pattern in GENERIC_PATTERNS:
+        if re.match(pattern, upper_title):
+            return True
+    # Also flag very short titles
+    if len(title) <= 3:
+        return True
+    return False
+
+
+def get_pending_identification():
+    """Get items that need identification (generic names in renameable states)."""
+    pending = []
+    for state in RENAMEABLE_STATES:
+        pattern = os.path.join(STAGING_DIR, f"*.{state}")
+        for state_file in glob.glob(pattern):
+            try:
+                with open(state_file, 'r') as f:
+                    metadata = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                continue
+
+            title = metadata.get('title', '')
+            # Check explicit flag first, fall back to pattern matching
+            needs_id = metadata.get('needs_identification', is_generic_title(title))
+
+            if needs_id:
+                pending.append({
+                    "state_file": os.path.basename(state_file),
+                    "state": state,
+                    "metadata": metadata,
+                    "mtime": os.path.getmtime(state_file)
+                })
+
+    return sorted(pending, key=lambda x: x["mtime"])
+
+
+def sanitize_filename(name):
+    """Sanitize string for use in filenames."""
+    # Replace special characters with underscore
+    sanitized = re.sub(r'[^a-zA-Z0-9._-]', '_', name)
+    # Collapse multiple underscores
+    sanitized = re.sub(r'__+', '_', sanitized)
+    # Remove leading/trailing underscores
+    return sanitized.strip('_')
+
+
+def generate_plex_filename(title, year, extension):
+    """Generate Plex-compatible filename like 'The Matrix (1999).mkv'."""
+    # Clean title (replace underscores with spaces, title case)
+    clean = title.replace('_', ' ')
+    clean = ' '.join(word.capitalize() for word in clean.split())
+
+    if year and re.match(r'^\d{4}$', str(year)):
+        return f"{clean} ({year}).{extension}"
+    return f"{clean}.{extension}"
+
+
+def read_nas_config():
+    """Read NAS configuration from config file."""
+    config = read_config()
+    return {
+        "host": config.get("NAS_HOST", "").replace("***", ""),  # Config may be masked
+        "user": config.get("NAS_USER", "").replace("***", ""),
+        "path": config.get("NAS_PATH", "").replace("***", "")
+    }
+
+
+def rename_remote_file(nas_host, nas_user, old_path, new_path):
+    """Rename a file on the NAS via SSH."""
+    try:
+        cmd = ["ssh", f"{nas_user}@{nas_host}", f'mv "{old_path}" "{new_path}"']
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        return result.returncode == 0, result.stderr.strip() or "OK"
+    except Exception as e:
+        return False, str(e)
+
+
+def rename_item(state_file_path, new_title, new_year):
+    """
+    Rename an item's files and update metadata.
+
+    Steps:
+    1. Read current metadata
+    2. Generate new filenames
+    3. Rename MKV, ISO, preview files (local or remote)
+    4. Update metadata with new paths
+    5. Create new state file with updated metadata
+    6. Remove old state file
+    """
+    # Read current metadata
+    with open(state_file_path, 'r') as f:
+        metadata = json.load(f)
+
+    old_title = metadata.get('title', '')
+    timestamp = metadata.get('timestamp', '')
+    year = metadata.get('year', '')
+    main_title = metadata.get('main_title', '')
+    state = os.path.basename(state_file_path).rsplit('.', 1)[-1]
+
+    # Generate new sanitized title for state files
+    new_sanitized = sanitize_filename(new_title)
+
+    # Current paths
+    old_mkv = metadata.get('mkv_path', '')
+    old_iso = metadata.get('iso_path', '')
+    old_preview = metadata.get('preview_path', '')
+    old_nas = metadata.get('nas_path', '')
+
+    # Initialize new paths
+    new_mkv = old_mkv
+    new_iso = old_iso
+    new_preview = old_preview
+    new_nas = old_nas
+
+    # Rename local MKV if exists
+    if old_mkv and os.path.exists(old_mkv):
+        new_mkv_name = generate_plex_filename(new_title, new_year, 'mkv')
+        new_mkv = os.path.join(STAGING_DIR, new_mkv_name)
+        os.rename(old_mkv, new_mkv)
+
+    # Rename ISO if exists (could be .iso or .iso.deletable)
+    if old_iso:
+        iso_deletable = old_iso + '.deletable'
+        if os.path.exists(iso_deletable):
+            new_iso_name = f"{new_sanitized}-{timestamp}.iso.deletable"
+            new_iso = os.path.join(STAGING_DIR, new_iso_name).replace('.deletable', '')
+            os.rename(iso_deletable, new_iso + '.deletable')
+        elif os.path.exists(old_iso):
+            new_iso_name = f"{new_sanitized}-{timestamp}.iso"
+            new_iso = os.path.join(STAGING_DIR, new_iso_name)
+            os.rename(old_iso, new_iso)
+
+    # Rename preview if exists
+    if old_preview and os.path.exists(old_preview):
+        new_preview = os.path.join(STAGING_DIR, f"{new_sanitized}-{timestamp}.preview.mp4")
+        os.rename(old_preview, new_preview)
+
+    # Rename NAS file if transferred
+    if state == "transferred" and old_nas:
+        nas_config = read_nas_config()
+        if nas_config["host"] and nas_config["user"]:
+            new_nas_name = generate_plex_filename(new_title, new_year, 'mkv')
+            nas_dir = os.path.dirname(old_nas)
+            new_nas = os.path.join(nas_dir, new_nas_name)
+            success, msg = rename_remote_file(
+                nas_config["host"], nas_config["user"], old_nas, new_nas
+            )
+            if not success:
+                raise Exception(f"Failed to rename on NAS: {msg}")
+
+    # Build updated metadata
+    new_metadata = {
+        "title": new_sanitized,
+        "year": new_year or year,
+        "timestamp": timestamp,
+        "main_title": main_title,
+        "iso_path": new_iso,
+        "mkv_path": new_mkv,
+        "preview_path": new_preview,
+        "nas_path": new_nas,
+        "needs_identification": False,
+        "identified_at": datetime.now().isoformat(),
+        "original_title": old_title,
+        "created_at": metadata.get("created_at", "")
+    }
+
+    # Create new state file
+    new_state_file = os.path.join(STAGING_DIR, f"{new_sanitized}-{timestamp}.{state}")
+
+    with open(new_state_file, 'w') as f:
+        json.dump(new_metadata, f, indent=2)
+
+    # Remove old state file (if different)
+    if state_file_path != new_state_file:
+        os.remove(state_file_path)
+
+    return os.path.basename(new_state_file)
 
 
 # ============================================================================
@@ -340,7 +544,15 @@ DASHBOARD_HTML = """
         <p>
             Pipeline v{{ pipeline_version }} | Dashboard v{{ dashboard_version }} |
             <a href="{{ github_url }}" target="_blank">dvd-auto-ripper</a> |
-            <a href="/architecture">Architecture</a>
+            <a href="/architecture">Architecture</a> |
+            <a href="/logs">Logs</a> |
+            <a href="/config">Config</a> |
+            <a href="/identify">
+                Pending ID
+                {% if pending_identification > 0 %}
+                <span style="background: #f59e0b; color: white; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: 600;">{{ pending_identification }}</span>
+                {% endif %}
+            </a>
         </p>
         <p style="margin-top: 4px;">
             Auto-refreshes every 30 seconds. Last update: {{ now }}
@@ -616,6 +828,289 @@ CONFIG_HTML = """
 </html>
 """
 
+IDENTIFY_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Pending Identification - DVD Ripper</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0; padding: 20px; background: #f0f2f5; color: #1a1a1a;
+            min-height: 100vh;
+        }
+        h1 { margin: 0 0 8px 0; }
+        h1 a { color: #3b82f6; text-decoration: none; }
+        h1 a:hover { text-decoration: underline; }
+        .subtitle { color: #666; margin-bottom: 20px; }
+        .identify-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+        }
+        .identify-card {
+            background: white;
+            border-radius: 8px;
+            padding: 16px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .preview-container {
+            position: relative;
+            background: #000;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 12px;
+        }
+        .preview-video {
+            width: 100%;
+            max-height: 240px;
+            display: block;
+        }
+        .no-preview {
+            padding: 60px 20px;
+            text-align: center;
+            color: #666;
+            background: #f8fafc;
+            border-radius: 4px;
+        }
+        .current-name {
+            font-family: monospace;
+            background: #fef3c7;
+            padding: 8px 12px;
+            border-radius: 4px;
+            margin-bottom: 12px;
+            font-size: 13px;
+            border-left: 3px solid #f59e0b;
+        }
+        .form-group { margin-bottom: 12px; }
+        .form-group label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 4px;
+            color: #374151;
+            font-size: 14px;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        .form-group input:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+        .form-row {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 12px;
+        }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        .btn-primary {
+            background: #3b82f6;
+            color: white;
+            width: 100%;
+        }
+        .btn-primary:hover { background: #2563eb; }
+        .btn-primary:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+        .state-info {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid #e5e7eb;
+            font-size: 12px;
+            color: #6b7280;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .state-iso-ready { background: #fef3c7; color: #92400e; }
+        .state-encoded-ready { background: #d1fae5; color: #065f46; }
+        .state-transferred { background: #ddd6fe; color: #5b21b6; }
+        .empty-state {
+            background: white;
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .empty-state h2 { color: #059669; margin-bottom: 8px; }
+        .empty-state p { color: #6b7280; }
+        .success-msg {
+            background: #d1fae5;
+            color: #065f46;
+            padding: 8px 12px;
+            border-radius: 4px;
+            margin-bottom: 12px;
+            display: none;
+        }
+        .error-msg {
+            background: #fee2e2;
+            color: #991b1b;
+            padding: 8px 12px;
+            border-radius: 4px;
+            margin-bottom: 12px;
+            display: none;
+        }
+        .footer {
+            margin-top: 20px;
+            font-size: 12px;
+            color: #666;
+            text-align: center;
+        }
+        .footer a { color: #3b82f6; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <h1><a href="/">Dashboard</a> / Pending Identification</h1>
+    <p class="subtitle">These items have generic names and need proper titles for Plex. Watch the preview to identify each movie.</p>
+
+    {% if pending %}
+    <div class="identify-grid">
+        {% for item in pending %}
+        <div class="identify-card" data-state-file="{{ item.state_file }}">
+            <div class="success-msg"></div>
+            <div class="error-msg"></div>
+
+            <div class="preview-container">
+                {% if item.metadata.preview_path %}
+                <video class="preview-video" controls preload="metadata">
+                    <source src="/api/preview/{{ item.metadata.preview_path.split('/')[-1] }}" type="video/mp4">
+                    Your browser does not support video playback.
+                </video>
+                {% else %}
+                <div class="no-preview">
+                    No preview available<br>
+                    <small>Preview will be generated during encoding</small>
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="current-name">
+                Current: {{ item.metadata.title | replace('_', ' ') }}
+                {% if item.metadata.year %} ({{ item.metadata.year }}){% endif %}
+            </div>
+
+            <form class="rename-form" onsubmit="return handleRename(this, event)">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="title-{{ loop.index }}">Movie Title</label>
+                        <input type="text" id="title-{{ loop.index }}" name="title"
+                               placeholder="The Matrix" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="year-{{ loop.index }}">Year</label>
+                        <input type="text" id="year-{{ loop.index }}" name="year"
+                               placeholder="1999" pattern="[0-9]{4}" maxlength="4">
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary">Rename &amp; Identify</button>
+            </form>
+
+            <div class="state-info">
+                <span class="status-badge state-{{ item.state }}">{{ item.state }}</span>
+                {% if item.metadata.nas_path %}
+                <span title="{{ item.metadata.nas_path }}">On NAS</span>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <h2>All Clear!</h2>
+        <p>No items need identification. All your DVDs have proper names.</p>
+        <p><a href="/">Return to Dashboard</a></p>
+    </div>
+    {% endif %}
+
+    <script>
+    async function handleRename(form, event) {
+        event.preventDefault();
+        const card = form.closest('.identify-card');
+        const stateFile = card.dataset.stateFile;
+        const title = form.title.value.trim();
+        const year = form.year.value.trim();
+        const submitBtn = form.querySelector('button[type="submit"]');
+        const successMsg = card.querySelector('.success-msg');
+        const errorMsg = card.querySelector('.error-msg');
+
+        // Hide previous messages
+        successMsg.style.display = 'none';
+        errorMsg.style.display = 'none';
+
+        // Disable button during request
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Renaming...';
+
+        try {
+            const response = await fetch('/api/identify/' + encodeURIComponent(stateFile) + '/rename', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({title, year})
+            });
+            const result = await response.json();
+
+            if (response.ok) {
+                successMsg.textContent = 'Renamed successfully to: ' + title + (year ? ' (' + year + ')' : '');
+                successMsg.style.display = 'block';
+                // Fade out and remove card after a moment
+                setTimeout(() => {
+                    card.style.opacity = '0.5';
+                    card.style.pointerEvents = 'none';
+                }, 1000);
+                setTimeout(() => {
+                    card.remove();
+                    // Check if no more cards
+                    if (document.querySelectorAll('.identify-card').length === 0) {
+                        location.reload();
+                    }
+                }, 2000);
+            } else {
+                errorMsg.textContent = result.error || 'Rename failed';
+                errorMsg.style.display = 'block';
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Rename & Identify';
+            }
+        } catch (e) {
+            errorMsg.textContent = 'Request failed: ' + e.message;
+            errorMsg.style.display = 'block';
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Rename & Identify';
+        }
+        return false;
+    }
+    </script>
+
+    <div class="footer">
+        Pipeline v{{ pipeline_version }} | Dashboard v{{ dashboard_version }} |
+        <a href="{{ github_url }}" target="_blank">dvd-auto-ripper</a>
+    </div>
+</body>
+</html>
+"""
+
 
 # ============================================================================
 # Routes
@@ -637,6 +1132,7 @@ def dashboard():
         now=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         message=message,
         message_type=message_type,
+        pending_identification=len(get_pending_identification()),
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
         github_url=GITHUB_URL
@@ -673,6 +1169,18 @@ def architecture_page():
     """Architecture documentation page."""
     return render_template_string(
         ARCHITECTURE_HTML,
+        pipeline_version=get_pipeline_version(),
+        dashboard_version=DASHBOARD_VERSION,
+        github_url=GITHUB_URL
+    )
+
+
+@app.route("/identify")
+def identify_page():
+    """Pending identification page for generic-named movies."""
+    return render_template_string(
+        IDENTIFY_HTML,
+        pending=get_pending_identification(),
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
         github_url=GITHUB_URL
@@ -743,6 +1251,65 @@ def api_trigger(stage):
         return jsonify({"status": "triggered", "stage": stage})
     else:
         return jsonify({"error": message}), 500
+
+
+# ============================================================================
+# Identification API Routes
+# ============================================================================
+
+@app.route("/api/identify/pending")
+def api_identify_pending():
+    """API: Get items pending identification."""
+    return jsonify(get_pending_identification())
+
+
+@app.route("/api/identify/<path:state_file>/rename", methods=["POST"])
+def api_identify_rename(state_file):
+    """API: Rename an item with new title/year."""
+    data = request.get_json() or {}
+    new_title = data.get('title', '').strip()
+    new_year = data.get('year', '').strip()
+
+    if not new_title:
+        return jsonify({"error": "Title is required"}), 400
+
+    if new_year and not re.match(r'^\d{4}$', new_year):
+        return jsonify({"error": "Year must be 4 digits"}), 400
+
+    # Build full path and verify state file exists
+    full_path = os.path.join(STAGING_DIR, state_file)
+    if not os.path.exists(full_path):
+        return jsonify({"error": "Item not found"}), 404
+
+    # Verify state is renameable
+    state = state_file.rsplit('.', 1)[-1] if '.' in state_file else ''
+    if state not in RENAMEABLE_STATES:
+        return jsonify({"error": f"Cannot rename items in '{state}' state"}), 400
+
+    try:
+        new_state_file = rename_item(full_path, new_title, new_year)
+        return jsonify({
+            "status": "renamed",
+            "new_state_file": new_state_file,
+            "new_title": new_title,
+            "new_year": new_year
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/preview/<filename>")
+def api_serve_preview(filename):
+    """API: Serve preview video file."""
+    # Security: only allow .preview.mp4 files
+    if not filename.endswith('.preview.mp4'):
+        return jsonify({"error": "Invalid preview file"}), 400
+
+    preview_path = os.path.join(STAGING_DIR, filename)
+    if not os.path.exists(preview_path):
+        return jsonify({"error": "Preview not found"}), 404
+
+    return send_file(preview_path, mimetype='video/mp4')
 
 
 # ============================================================================

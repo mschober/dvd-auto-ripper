@@ -164,6 +164,33 @@ CLEANUP_ISO_AFTER_TRANSFER="1"
 # Disk usage threshold (percentage) - skip ripping if disk is too full
 DISK_USAGE_THRESHOLD="80"
 
+# Delete preview after successful NAS transfer (0=keep for identification, 1=delete)
+# Preview files are kept by default to allow identification of generic-named movies
+CLEANUP_PREVIEW_AFTER_TRANSFER="0"
+
+# ============================================================================
+# Preview Generation Configuration
+# ============================================================================
+# Previews are short video clips extracted during encoding to help identify
+# DVDs that have generic/fallback names (e.g., "DVD_20251227_143022")
+# These are viewable in the dashboard's "Pending Identification" page
+
+# Enable preview generation (0=disabled, 1=enabled)
+# Requires ffmpeg and ffprobe to be installed
+GENERATE_PREVIEWS="1"
+
+# Preview duration in seconds (default: 120 = 2 minutes)
+PREVIEW_DURATION="120"
+
+# Start position as percentage into video (default: 25)
+# Setting to 25 starts the preview 1/4 into the movie, past intro commercials
+PREVIEW_START_PERCENT="25"
+
+# Preview resolution in ffmpeg scale format (default: 640:360 = 360p)
+# Lower resolution = smaller files, faster generation
+# Options: 640:360 (360p), 854:480 (480p), 1280:720 (720p)
+PREVIEW_RESOLUTION="640:360"
+
 # ============================================================================
 # Advanced Options
 # ============================================================================

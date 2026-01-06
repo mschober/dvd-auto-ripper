@@ -17,6 +17,66 @@ HANDBRAKE_QUALITY="${HANDBRAKE_QUALITY:-20}"
 HANDBRAKE_FORMAT="${HANDBRAKE_FORMAT:-mkv}"
 MIN_FILE_SIZE_MB="${MIN_FILE_SIZE_MB:-100}"
 
+# Preview generation settings
+GENERATE_PREVIEWS="${GENERATE_PREVIEWS:-1}"
+PREVIEW_DURATION="${PREVIEW_DURATION:-120}"
+PREVIEW_START_PERCENT="${PREVIEW_START_PERCENT:-25}"
+PREVIEW_RESOLUTION="${PREVIEW_RESOLUTION:-640:360}"
+
+# ============================================================================
+# Preview Generation Function
+# ============================================================================
+
+# Generate a preview clip from the encoded MKV for identification
+# Usage: generate_preview INPUT_MKV PREVIEW_PATH
+# Returns: 0 on success, 1 on failure
+generate_preview() {
+    local input_mkv="$1"
+    local preview_path="$2"
+
+    # Check if ffmpeg/ffprobe are available
+    if ! command -v ffmpeg &>/dev/null || ! command -v ffprobe &>/dev/null; then
+        log_warn "[ENCODER] ffmpeg/ffprobe not found, skipping preview generation"
+        return 1
+    fi
+
+    log_info "[ENCODER] Generating preview clip..."
+
+    # Get video duration using ffprobe
+    local duration
+    duration=$(ffprobe -v quiet -show_entries format=duration \
+        -of csv=p=0 "$input_mkv" 2>/dev/null | cut -d. -f1)
+
+    if [[ -z "$duration" ]] || [[ "$duration" -eq 0 ]]; then
+        log_warn "[ENCODER] Could not determine video duration, skipping preview"
+        return 1
+    fi
+
+    # Calculate start position (past intro/commercials)
+    local start_time=$((duration * PREVIEW_START_PERCENT / 100))
+
+    log_debug "[ENCODER] Video duration: ${duration}s, preview start: ${start_time}s"
+
+    # Generate preview clip at low resolution
+    if ffmpeg -ss "$start_time" -i "$input_mkv" \
+        -t "$PREVIEW_DURATION" \
+        -vf "scale=${PREVIEW_RESOLUTION}" \
+        -c:v libx264 -preset veryfast -crf 28 \
+        -c:a aac -b:a 64k \
+        -movflags +faststart \
+        -y "$preview_path" >> "$LOG_FILE" 2>&1; then
+
+        local preview_size=$(stat -c%s "$preview_path" 2>/dev/null || echo "0")
+        local preview_size_mb=$((preview_size / 1024 / 1024))
+        log_info "[ENCODER] Preview generated: ${preview_size_mb}MB at $preview_path"
+        return 0
+    else
+        log_warn "[ENCODER] Preview generation failed"
+        rm -f "$preview_path" 2>/dev/null
+        return 1
+    fi
+}
+
 # ============================================================================
 # Encoding Function
 # ============================================================================
@@ -130,6 +190,19 @@ encode_iso() {
     fi
 
     log_info "[ENCODER] Encoding successful"
+
+    # Generate preview clip for identification (if enabled)
+    local preview_path=""
+    if [[ "${GENERATE_PREVIEWS}" == "1" ]]; then
+        preview_path="${STAGING_DIR}/${sanitized_title}-${timestamp}.preview.mp4"
+        if ! generate_preview "$output_path" "$preview_path"; then
+            # Preview generation failed, continue without preview
+            preview_path=""
+        fi
+    fi
+
+    # Update metadata with preview path
+    metadata=$(build_state_metadata "$sanitized_title" "$year" "$timestamp" "$main_title" "$iso_path" "$output_path" "$preview_path")
 
     # Mark ISO as deletable (robust - handle missing file gracefully)
     local iso_deletable="${iso_path}.deletable"

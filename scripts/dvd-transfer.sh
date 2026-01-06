@@ -16,6 +16,7 @@ NAS_ENABLED="${NAS_ENABLED:-0}"
 NAS_FILE_OWNER="${NAS_FILE_OWNER:-plex:plex}"
 CLEANUP_MKV_AFTER_TRANSFER="${CLEANUP_MKV_AFTER_TRANSFER:-1}"
 CLEANUP_ISO_AFTER_TRANSFER="${CLEANUP_ISO_AFTER_TRANSFER:-1}"
+CLEANUP_PREVIEW_AFTER_TRANSFER="${CLEANUP_PREVIEW_AFTER_TRANSFER:-0}"
 
 # ============================================================================
 # Transfer Function
@@ -23,7 +24,7 @@ CLEANUP_ISO_AFTER_TRANSFER="${CLEANUP_ISO_AFTER_TRANSFER:-1}"
 
 transfer_video() {
     local state_file="$1"
-    local metadata mkv_path iso_path sanitized_title year timestamp
+    local metadata mkv_path iso_path sanitized_title year timestamp main_title preview_path
     local state_file_transferring
 
     log_info "[TRANSFER] Processing: $state_file"
@@ -35,8 +36,10 @@ transfer_video() {
     sanitized_title=$(parse_json_field "$metadata" "title")
     year=$(parse_json_field "$metadata" "year")
     timestamp=$(parse_json_field "$metadata" "timestamp")
+    main_title=$(parse_json_field "$metadata" "main_title")
     mkv_path=$(parse_json_field "$metadata" "mkv_path")
     iso_path=$(parse_json_field "$metadata" "iso_path")
+    preview_path=$(parse_json_field "$metadata" "preview_path")
 
     log_info "[TRANSFER] Title: '$sanitized_title', Year: '$year'"
     log_info "[TRANSFER] MKV: $mkv_path"
@@ -98,10 +101,23 @@ transfer_video() {
             fi
         fi
 
-        # Remove state file - transfer complete
-        remove_state_file "$state_file_transferring"
+        # Cleanup preview if configured (keep by default for identification)
+        if [[ "$CLEANUP_PREVIEW_AFTER_TRANSFER" == "1" ]] && [[ -n "$preview_path" ]] && [[ -f "$preview_path" ]]; then
+            log_info "[TRANSFER] Removing preview: $preview_path"
+            rm -f "$preview_path"
+            preview_path=""
+        fi
 
-        log_info "[TRANSFER] Transfer complete: $sanitized_title"
+        # Build NAS path for tracking
+        local nas_path="${NAS_PATH}/$(basename "$mkv_path")"
+
+        # Update metadata with NAS path and transition to "transferred" state
+        # This allows the dashboard to track and rename NAS files
+        metadata=$(build_state_metadata "$sanitized_title" "$year" "$timestamp" "$main_title" "$iso_path" "$mkv_path" "$preview_path" "$nas_path")
+        remove_state_file "$state_file_transferring"
+        create_pipeline_state "transferred" "$sanitized_title" "$timestamp" "$metadata" > /dev/null
+
+        log_info "[TRANSFER] Transfer complete: $sanitized_title (NAS: $nas_path)"
         return 0
     else
         log_error "[TRANSFER] Transfer failed"

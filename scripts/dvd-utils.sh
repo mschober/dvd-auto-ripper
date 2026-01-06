@@ -314,6 +314,37 @@ get_dvd_info() {
 }
 
 # ============================================================================
+# Generic Title Detection
+# ============================================================================
+
+# Check if title appears to be a generic/fallback name
+# Used to flag items that need user identification
+# Usage: is_generic_title TITLE
+# Returns: 0 if generic (needs identification), 1 if appears to be real title
+is_generic_title() {
+    local title="$1"
+    local upper_title="${title^^}"
+
+    # Pattern 1: Our fallback format DVD_YYYYMMDD_HHMMSS
+    if [[ "$title" =~ ^DVD_[0-9]{8}_[0-9]{6}$ ]]; then
+        return 0
+    fi
+
+    # Pattern 2: Common generic DVD volume labels (case-insensitive)
+    if [[ "$upper_title" =~ ^(DVD|DVD_VIDEO|DVDVIDEO|DISC[0-9]*|DISK[0-9]*|VIDEO_TS|MYDVD)$ ]]; then
+        return 0
+    fi
+
+    # Pattern 3: Very short titles (likely generic)
+    if [[ ${#title} -le 3 ]]; then
+        return 0
+    fi
+
+    # Not a generic title
+    return 1
+}
+
+# ============================================================================
 # Duplicate Detection
 # ============================================================================
 
@@ -695,7 +726,7 @@ parse_json_field() {
 }
 
 # Build JSON metadata for state files
-# Usage: build_state_metadata TITLE YEAR TIMESTAMP MAIN_TITLE ISO_PATH
+# Usage: build_state_metadata TITLE YEAR TIMESTAMP MAIN_TITLE ISO_PATH [MKV_PATH] [PREVIEW_PATH] [NAS_PATH]
 # Returns: JSON string
 build_state_metadata() {
     local title="$1"
@@ -704,7 +735,15 @@ build_state_metadata() {
     local main_title="$4"
     local iso_path="$5"
     local mkv_path="${6:-}"
+    local preview_path="${7:-}"
+    local nas_path="${8:-}"
     local created_at=$(date -Iseconds)
+
+    # Determine if item needs identification (generic title)
+    local needs_id="false"
+    if is_generic_title "$title"; then
+        needs_id="true"
+    fi
 
     cat <<EOF
 {
@@ -714,6 +753,9 @@ build_state_metadata() {
   "main_title": "$main_title",
   "iso_path": "$iso_path",
   "mkv_path": "$mkv_path",
+  "preview_path": "$preview_path",
+  "nas_path": "$nas_path",
+  "needs_identification": $needs_id,
   "created_at": "$created_at"
 }
 EOF
