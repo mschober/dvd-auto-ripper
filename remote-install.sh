@@ -259,7 +259,7 @@ create_users() {
     if [[ ! -d "$ssh_dir" ]]; then
         mkdir -p "$ssh_dir"
         chmod 700 "$ssh_dir"
-        chown dvd-transfer:dvd-transfer "$ssh_dir"
+        chown dvd-transfer:dvd-ripper "$ssh_dir"
         print_info "✓ Created SSH directory: $ssh_dir"
     fi
 
@@ -292,7 +292,7 @@ setup_ssh_keys() {
     if [[ ! -d "$ssh_dir" ]]; then
         mkdir -p "$ssh_dir"
         chmod 700 "$ssh_dir"
-        chown dvd-transfer:dvd-transfer "$ssh_dir"
+        chown dvd-transfer:dvd-ripper "$ssh_dir"
     fi
 
     # Generate SSH key if it doesn't exist
