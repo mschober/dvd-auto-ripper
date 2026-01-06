@@ -2930,6 +2930,18 @@ CLUSTER_HTML = """
         }
         .node-card.this-node { border-left-color: #10b981; }
         .node-card.offline { border-left-color: #ef4444; opacity: 0.7; }
+        .node-card.add-worker-card { border-left-color: #6366f1; border-style: dashed; }
+        .remove-peer-btn {
+            background: transparent;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            color: #888;
+            cursor: pointer;
+            font-size: 14px;
+            padding: 2px 6px;
+            transition: all 0.2s;
+        }
+        .remove-peer-btn:hover { background: #fee2e2; border-color: #ef4444; color: #ef4444; }
         .node-header {
             display: flex;
             justify-content: space-between;
@@ -3206,9 +3218,12 @@ CLUSTER_HTML = """
                     <span class="status-dot status-{{ 'online' if peer.online else 'offline' }}"></span>
                     {{ peer.name }}
                 </span>
-                <span class="badge badge-{{ 'online' if peer.online else 'offline' }}">
-                    {{ 'online' if peer.online else 'offline' }}
-                </span>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span class="badge badge-{{ 'online' if peer.online else 'offline' }}">
+                        {{ 'online' if peer.online else 'offline' }}
+                    </span>
+                    <button class="remove-peer-btn" onclick="removePeer('{{ peer.name }}')" title="Remove peer">✕</button>
+                </div>
             </div>
             {% if peer.online and peer.capacity %}
             <div class="node-stats">
@@ -3247,6 +3262,31 @@ CLUSTER_HTML = """
             {% endif %}
         </div>
         {% endfor %}
+
+        <!-- Add Worker Card -->
+        <div class="node-card add-worker-card">
+            <div class="node-header">
+                <span class="node-name">+ Add Worker</span>
+            </div>
+            <div style="padding: 12px 0;">
+                <div style="margin-bottom: 10px;">
+                    <label style="display: block; font-size: 12px; color: #888; margin-bottom: 4px;">Name</label>
+                    <input type="text" id="new-peer-name" placeholder="e.g. plex-server"
+                           style="width: 100%; padding: 8px; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: #fff;">
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <label style="display: block; font-size: 12px; color: #888; margin-bottom: 4px;">Host</label>
+                    <input type="text" id="new-peer-host" placeholder="e.g. 192.168.1.50"
+                           style="width: 100%; padding: 8px; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: #fff;">
+                </div>
+                <div style="margin-bottom: 12px;">
+                    <label style="display: block; font-size: 12px; color: #888; margin-bottom: 4px;">Port</label>
+                    <input type="text" id="new-peer-port" placeholder="5000" value="5000"
+                           style="width: 100%; padding: 8px; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: #fff;">
+                </div>
+                <button onclick="addPeer()" class="action-btn" style="width: 100%;">Add Worker</button>
+            </div>
+        </div>
     </div>
 
     <!-- Distributed Jobs -->
@@ -3376,6 +3416,74 @@ CLUSTER_HTML = """
         setTimeout(function() {
             location.reload();
         }, 30000);
+
+        // Current peers from server (for add/remove operations)
+        const currentPeers = {{ peers_raw | tojson | safe }};
+
+        async function addPeer() {
+            const name = document.getElementById('new-peer-name').value.trim();
+            const host = document.getElementById('new-peer-host').value.trim();
+            const port = document.getElementById('new-peer-port').value.trim() || '5000';
+
+            if (!name || !host) {
+                alert('Name and Host are required');
+                return;
+            }
+
+            // Validate port is numeric
+            if (!/^\d+$/.test(port)) {
+                alert('Port must be a number');
+                return;
+            }
+
+            // Build new peer string
+            const newPeer = `${name}:${host}:${port}`;
+            const updatedPeers = currentPeers ? `${currentPeers} ${newPeer}` : newPeer;
+
+            try {
+                const response = await fetch('/api/config/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ settings: { 'CLUSTER_PEERS': updatedPeers } })
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    window.location.reload();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
+        }
+
+        async function removePeer(peerName) {
+            if (!confirm(`Remove worker "${peerName}" from cluster?`)) {
+                return;
+            }
+
+            // Parse current peers and filter out the one to remove
+            const peers = currentPeers.split(/\s+/).filter(p => p.trim());
+            const updatedPeers = peers.filter(p => !p.startsWith(peerName + ':')).join(' ');
+
+            try {
+                const response = await fetch('/api/config/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ settings: { 'CLUSTER_PEERS': updatedPeers } })
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    window.location.reload();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
+        }
     </script>
     {% endif %}
 </body>
@@ -3995,6 +4103,7 @@ def cluster_page():
         cluster_enabled=config["cluster_enabled"],
         this_node=this_node,
         peers=peers,
+        peers_raw=config["peers_raw"],
         distributed_jobs=get_distributed_jobs(),
         received_jobs=get_received_jobs(),
         io=get_io_stats(),
