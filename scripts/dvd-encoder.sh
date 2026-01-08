@@ -58,6 +58,23 @@ clear_partial_dvdcss_cache() {
     fi
 }
 
+# Prepare dvdcss cache for encoding an ISO
+# Imports packaged CSS keys if available, otherwise clears partial cache
+# Usage: prepare_dvdcss_cache ISO_PATH
+prepare_dvdcss_cache() {
+    local iso_path="$1"
+
+    # Try to import packaged keys first
+    if import_dvdcss_keys "$iso_path"; then
+        log_info "[ENCODER] Imported packaged CSS keys"
+        return 0
+    fi
+
+    # Fall back to clearing partial cache (forces fresh key cracking)
+    log_info "[ENCODER] No packaged keys, clearing partial cache"
+    clear_partial_dvdcss_cache
+}
+
 # ============================================================================
 # Preview Generation Function
 # ============================================================================
@@ -142,6 +159,9 @@ encode_iso() {
         remove_state_file "$state_file"
         return 1
     fi
+
+    # Prepare CSS cache (import packaged keys or clear partial cache)
+    prepare_dvdcss_cache "$iso_path"
 
     # Generate Plex-friendly output filename (e.g., "The Matrix (1999).mkv")
     output_filename=$(generate_plex_filename "$sanitized_title" "$year" "$HANDBRAKE_FORMAT")
@@ -247,8 +267,9 @@ encode_iso() {
         else
             log_warn "[ENCODER] Could not rename ISO to .deletable (may already be renamed)"
         fi
-        # Also remove mapfile if it exists
+        # Also remove mapfile and keys directory if they exist
         rm -f "${iso_path}.mapfile" 2>/dev/null
+        rm -rf "${iso_path}.keys" 2>/dev/null
     else
         log_warn "[ENCODER] ISO file not found for cleanup (already deleted?): $iso_path"
     fi
@@ -350,9 +371,6 @@ main() {
 
     # Check for recovery scenarios
     check_encoder_recovery
-
-    # Clear partial dvdcss cache to avoid disc ID mismatch issues
-    clear_partial_dvdcss_cache
 
     # Find oldest iso-ready state file
     local state_file=$(find_oldest_state "iso-ready")
@@ -486,6 +504,9 @@ encode_iso_from_encoding() {
         return 1
     fi
 
+    # Prepare CSS cache (import packaged keys or clear partial cache)
+    prepare_dvdcss_cache "$iso_path"
+
     # Generate Plex-friendly output filename
     output_filename=$(generate_plex_filename "$sanitized_title" "$year" "$HANDBRAKE_FORMAT")
     output_path="${STAGING_DIR}/${output_filename}"
@@ -580,6 +601,7 @@ encode_iso_from_encoding() {
             log_warn "[ENCODER] Could not rename ISO to .deletable"
         fi
         rm -f "${iso_path}.mapfile" 2>/dev/null
+        rm -rf "${iso_path}.keys" 2>/dev/null
     fi
 
     # Transition state: encoding -> encoded-ready

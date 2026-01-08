@@ -578,6 +578,93 @@ wait_for_device() {
 }
 
 # ============================================================================
+# CSS Key Management
+# ============================================================================
+
+# Get the dvdcss cache directory for a disc by volume label
+# Usage: get_dvdcss_cache_dir VOLUME_LABEL
+# Returns: Path to most recently modified cache dir, or empty if not found
+get_dvdcss_cache_dir() {
+    local volume_label="$1"
+    local cache_dir="${DVDCSS_CACHE:-/var/cache/dvdcss}"
+
+    if [[ -z "$volume_label" ]]; then
+        return 1
+    fi
+
+    # Find matching cache directory (most recently modified, exclude -0000000000)
+    find "$cache_dir" -maxdepth 1 -type d -name "${volume_label}-*" \
+        ! -name "*-0000000000" \
+        -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-
+}
+
+# Package CSS keys alongside ISO file for cluster distribution
+# Usage: package_dvdcss_keys ISO_PATH VOLUME_LABEL
+# Creates: ISO_PATH.keys/ directory containing CSS decryption keys
+package_dvdcss_keys() {
+    local iso_path="$1"
+    local volume_label="$2"
+    local keys_dir="${iso_path}.keys"
+
+    local cache_dir=$(get_dvdcss_cache_dir "$volume_label")
+    if [[ -z "$cache_dir" || ! -d "$cache_dir" ]]; then
+        log_warn "No dvdcss cache found for volume label: $volume_label"
+        return 1
+    fi
+
+    mkdir -p "$keys_dir"
+    cp -a "$cache_dir"/* "$keys_dir/" 2>/dev/null
+
+    # Store the original cache dir name for reference (needed for import)
+    basename "$cache_dir" > "$keys_dir/.disc_id"
+
+    # Set ownership to match ISO file
+    chown -R "$(stat -c '%U:%G' "$iso_path")" "$keys_dir" 2>/dev/null
+
+    local key_count=$(find "$keys_dir" -maxdepth 1 -type f ! -name '.disc_id' | wc -l)
+    log_info "Packaged $key_count CSS keys to $keys_dir"
+    return 0
+}
+
+# Import CSS keys from ISO sidecar to local dvdcss cache
+# Usage: import_dvdcss_keys ISO_PATH
+# Copies keys from ISO_PATH.keys/ to local cache with -0000000000 suffix
+import_dvdcss_keys() {
+    local iso_path="$1"
+    local keys_dir="${iso_path}.keys"
+    local cache_dir="${DVDCSS_CACHE:-/var/cache/dvdcss}"
+
+    if [[ ! -d "$keys_dir" ]]; then
+        log_debug "No keys directory found at $keys_dir"
+        return 1
+    fi
+
+    # Read the original disc ID
+    local disc_id=""
+    if [[ -f "$keys_dir/.disc_id" ]]; then
+        disc_id=$(cat "$keys_dir/.disc_id")
+    fi
+
+    if [[ -z "$disc_id" ]]; then
+        log_warn "No disc ID found in $keys_dir/.disc_id"
+        return 1
+    fi
+
+    # Create cache directory for ISO access pattern (-0000000000 suffix)
+    # Extract base name without suffix (e.g., DVD_VIDEO-xxx from DVD_VIDEO-xxx-1762a2987d)
+    local base_name="${disc_id%-*}"
+    local iso_cache_dir="$cache_dir/${base_name}-0000000000"
+
+    mkdir -p "$iso_cache_dir"
+    cp -n "$keys_dir"/* "$iso_cache_dir/" 2>/dev/null  # -n = don't overwrite
+    rm -f "$iso_cache_dir/.disc_id"  # Don't keep the metadata file in cache
+
+    local key_count=$(find "$iso_cache_dir" -maxdepth 1 -type f | wc -l)
+    log_info "Imported $key_count CSS keys to $iso_cache_dir"
+    return 0
+}
+
+# ============================================================================
 # Cleanup Functions
 # ============================================================================
 
@@ -1080,6 +1167,15 @@ distribute_to_peer() {
     fi
 
     log_info "[CLUSTER] ISO transferred to $peer_name"
+
+    # Also transfer CSS keys directory if it exists (for cluster decryption)
+    if [[ -d "${iso_path}.keys" ]]; then
+        if rsync -avz "${iso_path}.keys" "$remote_dest" >> "$LOG_FILE" 2>&1; then
+            log_info "[CLUSTER] CSS keys transferred to $peer_name"
+        else
+            log_warn "[CLUSTER] Could not transfer CSS keys to $peer_name (encoding may need to crack keys)"
+        fi
+    fi
 
     # Update metadata with distribution info
     local new_metadata=$(update_metadata_for_distribution "$metadata" "$CLUSTER_NODE_NAME" "$peer_name")

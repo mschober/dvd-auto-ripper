@@ -75,6 +75,14 @@ create_dvd_iso() {
 
         log_info "[ISO] ISO ready for encoding: $state_file_ready"
 
+        # Package CSS keys for cluster distribution (must be before eject)
+        local volume_label=$(blkid -o value -s LABEL "$device" 2>/dev/null)
+        if [[ -n "$volume_label" ]] && package_dvdcss_keys "$iso_path" "$volume_label"; then
+            log_info "[ISO] CSS keys packaged with ISO"
+        else
+            log_warn "[ISO] Could not package CSS keys (encoding may need to crack keys)"
+        fi
+
         # Eject disc immediately - drive is now free for next disc
         eject_disc "$device"
 
