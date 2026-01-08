@@ -35,6 +35,29 @@ It would occur even if both stages ran as the same user. The v2 changes made it 
 1. Separate users create separate cache subdirectories
 2. Better logging shows the disc ID mismatch
 
+## CSS Errors Don't Always Mean Encoding Fails
+
+**Important**: Seeing CSS key errors in the log does NOT necessarily mean encoding will fail.
+
+```
+libdvdread: Error cracking CSS key for /VIDEO_TS/VTS_03_1.VOB (0x00022460)
+```
+
+These errors often occur for **bonus content VOBs** (menus, extras, trailers) that aren't part of the main title. HandBrake will:
+1. Log the CSS errors
+2. Skip the encrypted bonus content
+3. **Successfully encode the main movie**
+
+**When to worry about CSS errors:**
+- Encoding stuck at 0.00% with 0-byte output file AND main title VOB errors
+- Multiple retry attempts all fail at the same point
+
+**When CSS errors are fine:**
+- Encoding progresses past 1% despite CSS errors in the log
+- Errors are for high-numbered VTS files (usually bonus content)
+
+If v2 encoding hangs at 0.00-0.01% but v1 (main branch) encodes the same ISO successfully, the issue is likely **file permissions or systemd isolation**, not CSS keys.
+
 ## Current Solution: Key Packaging
 
 The pipeline now packages CSS keys as a sidecar directory alongside each ISO:
