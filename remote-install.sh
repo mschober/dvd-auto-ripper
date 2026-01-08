@@ -629,6 +629,15 @@ install_pipeline_timers() {
         print_warn "dvd-transfer.timer not found, skipping"
     fi
 
+    # Install udev control service (for pause/resume via dashboard)
+    if [[ -f "$SCRIPT_DIR/config/dvd-udev-control@.service" ]]; then
+        cp "$SCRIPT_DIR/config/dvd-udev-control@.service" "$systemd_dir/"
+        chmod 644 "$systemd_dir/dvd-udev-control@.service"
+        print_info "✓ dvd-udev-control@.service installed"
+    else
+        print_warn "dvd-udev-control@.service not found, skipping"
+    fi
+
     # Reload systemd
     systemctl daemon-reload
 

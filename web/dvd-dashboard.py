@@ -4394,19 +4394,20 @@ def api_control_udev(action):
     if action not in ["pause", "resume"]:
         return jsonify({"error": "Invalid action. Use 'pause' or 'resume'"}), 400
 
-    # Use the existing shell scripts for pause/resume
-    script = f"/usr/local/bin/dvd-ripper-trigger-{action}.sh"
+    # Use systemctl to trigger the udev control service
+    # This runs via polkit which allows dvd-web to manage dvd-udev-control@*.service
+    service = f"dvd-udev-control@{action}.service"
 
     try:
         result = subprocess.run(
-            [script],
+            ["systemctl", "start", service],
             capture_output=True, text=True, timeout=10
         )
         success = result.returncode == 0
-        message = result.stdout.strip() or result.stderr.strip()
-    except FileNotFoundError:
-        success = False
-        message = f"Script not found: {script}"
+        if success:
+            message = f"Disc detection {action}d"
+        else:
+            message = result.stderr.strip() or result.stdout.strip() or "Unknown error"
     except subprocess.TimeoutExpired:
         success = False
         message = "Command timed out"

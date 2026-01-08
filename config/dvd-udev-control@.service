@@ -1,0 +1,14 @@
+[Unit]
+Description=DVD Ripper Udev Control (%i)
+Documentation=https://github.com/mschober/dvd-auto-ripper
+# Oneshot service to pause or resume DVD auto-detection via udev rule
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+
+# Run as root to manage /etc/udev/rules.d/
+ExecStart=/usr/local/bin/dvd-ripper-trigger-%i.sh
+
+# Minimal execution time
+TimeoutStartSec=10

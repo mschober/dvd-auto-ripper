@@ -11,6 +11,7 @@
 //   - dvd-transfer.timer
 //   - dvd-ripper@*.service (legacy mode)
 //   - dvd-dashboard.service (self-restart)
+//   - dvd-udev-control@*.service (pause/resume udev trigger)
 
 polkit.addRule(function(action, subject) {
     // Only apply to dvd-web user
@@ -30,7 +31,8 @@ polkit.addRule(function(action, subject) {
             unit === "dvd-transfer.service" ||
             unit === "dvd-transfer.timer" ||
             unit.match(/^dvd-ripper@.*\.service$/) ||
-            unit === "dvd-dashboard.service"
+            unit === "dvd-dashboard.service" ||
+            unit.match(/^dvd-udev-control@.*\.service$/)
         )) {
             return polkit.Result.YES;
         }
