@@ -1027,7 +1027,8 @@ CLUSTER_REMOTE_STAGING="${CLUSTER_REMOTE_STAGING:-/var/tmp/dvd-rips}"
 
 # Check if we should distribute a job to a peer node
 # Returns: 0 if should distribute, 1 if should encode locally
-# Logic: Distribute if local load is high AND queue has multiple items
+# Logic: Distribute if cluster enabled, peers configured, and multiple jobs queued
+# Note: We no longer require high local load - the goal is to utilize idle peers proactively
 should_distribute_job() {
     # Only consider distribution if cluster is enabled
     if [[ "$CLUSTER_ENABLED" != "1" ]]; then
@@ -1040,22 +1041,14 @@ should_distribute_job() {
         return 1
     fi
 
-    # Get current load info
-    local load_1m=$(get_load_average)
-    local cpu_count=$(get_cpu_count)
-    local threshold=$(awk "BEGIN {printf \"%.2f\", $cpu_count * $ENCODER_LOAD_THRESHOLD}")
-
-    # Check if load is above threshold
-    local is_busy=$(awk "BEGIN {print ($load_1m >= $threshold) ? 1 : 0}")
-
-    # Check queue depth
+    # Check queue depth - only distribute if multiple jobs queued
+    # This ensures local machine still has work to do
     local queue_depth=$(count_pending_state "iso-ready")
 
-    log_debug "[CLUSTER] Load: $load_1m, Threshold: $threshold, Queue: $queue_depth"
+    log_debug "[CLUSTER] Queue depth: $queue_depth"
 
-    # Only distribute if busy AND queue has multiple items
-    if [[ "$is_busy" == "1" ]] && [[ "$queue_depth" -gt 1 ]]; then
-        log_info "[CLUSTER] Local load high ($load_1m >= $threshold), considering distribution"
+    if [[ "$queue_depth" -gt 1 ]]; then
+        log_info "[CLUSTER] Multiple jobs queued ($queue_depth), distribution candidate"
         return 0
     fi
 
