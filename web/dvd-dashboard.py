@@ -26,9 +26,9 @@ DASHBOARD_VERSION = "1.6.0"
 GITHUB_URL = "https://github.com/mschober/dvd-auto-ripper"
 
 LOCK_FILES = {
-    "iso": "/var/run/dvd-ripper-iso.lock",
-    "encoder": "/var/run/dvd-ripper-encoder.lock",
-    "transfer": "/var/run/dvd-ripper-transfer.lock"
+    "iso": "/run/dvd-ripper/iso.lock",
+    "encoder": "/run/dvd-ripper/encoder.lock",
+    "transfer": "/run/dvd-ripper/transfer.lock"
 }
 STATE_ORDER = ["iso-creating", "iso-ready", "encoding", "encoded-ready", "transferring", "transferred"]
 
