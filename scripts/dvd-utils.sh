@@ -513,16 +513,46 @@ transfer_to_nas() {
 
 # Eject disc from device
 # Usage: eject_disc DEVICE
-# TODO: Fix eject to handle waiting/retrying while device becomes available.
-#       After ddrescue completes, the device may still be busy. Need to:
-#       1. Wait for device to become available (not busy)
-#       2. Retry eject with backoff if it fails
-#       3. Handle "device busy" errors gracefully
+#
+# Handles desktop-automounted discs by using udisksctl for unmount (uses polkit)
+# before ejecting. Falls back to direct eject if udisksctl unavailable.
 eject_disc() {
     local device="$1"
+    local block_device
+
+    # Normalize device path (e.g., /dev/sr0)
+    block_device=$(readlink -f "$device")
+
     log_info "Ejecting disc from $device"
-    eject "$device" 2>&1 | tee -a "$LOG_FILE"
-    return ${PIPESTATUS[0]}
+
+    # First, try to unmount using udisksctl (works with polkit, no root needed)
+    # This handles desktop-automounted discs at /media/username/...
+    if command -v udisksctl &>/dev/null; then
+        log_debug "Attempting unmount via udisksctl"
+        if udisksctl unmount -b "$block_device" 2>&1 | tee -a "$LOG_FILE"; then
+            log_debug "udisksctl unmount successful"
+        else
+            # Not an error - disc might not be mounted
+            log_debug "udisksctl unmount returned non-zero (disc may not be mounted)"
+        fi
+    fi
+
+    # Now eject - retry a few times in case device is briefly busy
+    local attempt
+    for attempt in 1 2 3; do
+        if eject "$block_device" 2>&1 | tee -a "$LOG_FILE"; then
+            log_info "Disc ejected successfully"
+            return 0
+        fi
+
+        if [[ $attempt -lt 3 ]]; then
+            log_debug "Eject attempt $attempt failed, retrying in 2s..."
+            sleep 2
+        fi
+    done
+
+    log_error "Failed to eject disc after 3 attempts"
+    return 1
 }
 
 # Wait for device to be ready

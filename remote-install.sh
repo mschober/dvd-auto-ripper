@@ -731,6 +731,17 @@ install_polkit_rules() {
     chmod 644 "$rules_dest"
     print_info "✓ Polkit rules installed: $rules_dest"
     print_info "  Dashboard can now manage services without sudo"
+
+    # Install udisks polkit rules for dvd-rip eject
+    local udisks_rules_source="$SCRIPT_DIR/config/51-dvd-rip-udisks.rules"
+    local udisks_rules_dest="$polkit_dir/51-dvd-rip-udisks.rules"
+
+    if [[ -f "$udisks_rules_source" ]]; then
+        cp "$udisks_rules_source" "$udisks_rules_dest"
+        chmod 644 "$udisks_rules_dest"
+        print_info "✓ Polkit udisks rules installed: $udisks_rules_dest"
+        print_info "  dvd-rip can now eject automounted discs"
+    fi
 }
 
 install_lm_sensors() {
