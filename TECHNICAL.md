@@ -106,9 +106,9 @@ Prevent concurrent operations within each stage:
 
 | Lock File | Stage | Purpose |
 |-----------|-------|---------|
-| `/var/run/dvd-ripper-iso.lock` | 1 | Only one ISO creation at a time |
-| `/var/run/dvd-ripper-encoder.lock` | 2 | Only one encode at a time |
-| `/var/run/dvd-ripper-transfer.lock` | 3 | Only one transfer at a time |
+| `/run/dvd-ripper/iso.lock` | 1 | Only one ISO creation at a time |
+| `/run/dvd-ripper/encoder.lock` | 2 | Only one encode at a time |
+| `/run/dvd-ripper/transfer.lock` | 3 | Only one transfer at a time |
 
 Lock files contain the PID of the holding process. Stale locks (process dead) are automatically detected and cleaned up.
 
@@ -313,7 +313,7 @@ sudo dpkg-reconfigure libdvd-pkg
 └── *.preview.mp4           # Preview clips
 
 /var/log/dvd-ripper.log     # Application log
-/var/run/dvd-ripper-*.lock  # Stage lock files
+/run/dvd-ripper/*.lock      # Stage lock files
 /etc/dvd-ripper.conf        # Configuration
 /usr/local/bin/dvd-*.sh     # Installed scripts
 ```

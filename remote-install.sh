@@ -24,8 +24,7 @@
 # Runtime files:
 #   /var/tmp/dvd-rips/              - Staging directory for ripped files
 #   /var/log/dvd-ripper.log         - Application log file
-#   /var/run/dvd-ripper.pid         - PID file (while ripping)
-#   /var/run/dvd-ripper.lock        - Lock file (while ripping)
+#   /run/dvd-ripper/                - Runtime directory for lock/PID files
 #
 # Udev integration:
 #   /etc/udev/rules.d/*.rules       - Your existing udev rule (not managed)
@@ -193,6 +192,127 @@ check_dependencies() {
     print_info "✓ All dependencies satisfied"
 }
 
+# ============================================================================
+# User/Group Creation (v2.0 Security Model)
+# ============================================================================
+
+create_users() {
+    print_info "Setting up DVD ripper users and groups..."
+
+    # Create the shared group if it doesn't exist
+    if ! getent group dvd-ripper >/dev/null 2>&1; then
+        groupadd --system dvd-ripper
+        print_info "✓ Created group: dvd-ripper"
+    else
+        print_info "  Group dvd-ripper already exists"
+    fi
+
+    # Create dvd-rip user (Stage 1: ISO creation, needs cdrom access)
+    if ! getent passwd dvd-rip >/dev/null 2>&1; then
+        useradd --system \
+            --gid dvd-ripper \
+            --groups cdrom \
+            --home-dir /nonexistent \
+            --no-create-home \
+            --shell /usr/sbin/nologin \
+            --comment "DVD Ripper - ISO Creation" \
+            dvd-rip
+        print_info "✓ Created user: dvd-rip (groups: dvd-ripper, cdrom)"
+    else
+        # Ensure user is in correct groups
+        usermod -g dvd-ripper -G cdrom dvd-rip 2>/dev/null || true
+        print_info "  User dvd-rip already exists"
+    fi
+
+    # Create dvd-encode user (Stage 2: HandBrake encoding)
+    if ! getent passwd dvd-encode >/dev/null 2>&1; then
+        useradd --system \
+            --gid dvd-ripper \
+            --home-dir /nonexistent \
+            --no-create-home \
+            --shell /usr/sbin/nologin \
+            --comment "DVD Ripper - Encoder" \
+            dvd-encode
+        print_info "✓ Created user: dvd-encode (group: dvd-ripper)"
+    else
+        usermod -g dvd-ripper dvd-encode 2>/dev/null || true
+        print_info "  User dvd-encode already exists"
+    fi
+
+    # Create dvd-transfer user (Stage 3: NAS transfer, needs SSH keys)
+    if ! getent passwd dvd-transfer >/dev/null 2>&1; then
+        useradd --system \
+            --gid dvd-ripper \
+            --home-dir /var/lib/dvd-transfer \
+            --create-home \
+            --shell /usr/sbin/nologin \
+            --comment "DVD Ripper - NAS Transfer" \
+            dvd-transfer
+        print_info "✓ Created user: dvd-transfer (group: dvd-ripper)"
+    else
+        usermod -g dvd-ripper dvd-transfer 2>/dev/null || true
+        print_info "  User dvd-transfer already exists"
+    fi
+
+    # Create SSH directory for dvd-transfer
+    local ssh_dir="/var/lib/dvd-transfer/.ssh"
+    if [[ ! -d "$ssh_dir" ]]; then
+        mkdir -p "$ssh_dir"
+        chmod 700 "$ssh_dir"
+        chown dvd-transfer:dvd-ripper "$ssh_dir"
+        print_info "✓ Created SSH directory: $ssh_dir"
+    fi
+
+    # Create dvd-web user (Web dashboard)
+    if ! getent passwd dvd-web >/dev/null 2>&1; then
+        useradd --system \
+            --gid dvd-ripper \
+            --home-dir /nonexistent \
+            --no-create-home \
+            --shell /usr/sbin/nologin \
+            --comment "DVD Ripper - Web Dashboard" \
+            dvd-web
+        print_info "✓ Created user: dvd-web (group: dvd-ripper)"
+    else
+        usermod -g dvd-ripper dvd-web 2>/dev/null || true
+        print_info "  User dvd-web already exists"
+    fi
+
+    print_info "✓ User setup complete"
+}
+
+# Generate SSH key for dvd-transfer user (NAS transfers)
+setup_ssh_keys() {
+    print_info "Setting up SSH keys for dvd-transfer user..."
+
+    local ssh_dir="/var/lib/dvd-transfer/.ssh"
+    local key_file="${ssh_dir}/id_ed25519"
+
+    # Ensure directory exists with correct permissions
+    if [[ ! -d "$ssh_dir" ]]; then
+        mkdir -p "$ssh_dir"
+        chmod 700 "$ssh_dir"
+        chown dvd-transfer:dvd-ripper "$ssh_dir"
+    fi
+
+    # Generate SSH key if it doesn't exist
+    if [[ ! -f "$key_file" ]]; then
+        print_info "Generating SSH key for dvd-transfer user..."
+        sudo -u dvd-transfer ssh-keygen -t ed25519 -f "$key_file" -N "" -C "dvd-transfer@$(hostname)"
+        print_info "✓ SSH key generated: $key_file"
+        print_warn ""
+        print_warn "*** IMPORTANT: Deploy public key to NAS ***"
+        print_warn "Copy this public key to your NAS authorized_keys:"
+        print_warn ""
+        cat "${key_file}.pub"
+        print_warn ""
+        print_warn "Command: ssh-copy-id -i ${key_file}.pub <nas-user>@<nas-host>"
+        print_warn ""
+    else
+        print_info "✓ SSH key already exists: $key_file"
+    fi
+}
+
 merge_config() {
     # Merge new config options into existing config file
     # Keeps all existing user settings, adds any new settings from the example
@@ -340,6 +460,10 @@ install_config() {
         # Merge configs
         merge_config "$config_file" "$config_source" "$config_file"
 
+        # Ensure correct permissions for dashboard access
+        chmod 660 "$config_file"
+        chown root:dvd-ripper "$config_file"
+
         print_info "✓ Configuration merged: $config_file"
         return
     fi
@@ -351,6 +475,10 @@ install_config() {
         local backup_file="${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
         cp "$config_file" "$backup_file"
         print_info "✓ Backed up existing configuration to: $backup_file"
+
+        # Ensure correct permissions for dashboard access
+        chmod 660 "$config_file"
+        chown root:dvd-ripper "$config_file"
 
         print_warn "Keeping existing configuration (not overwriting)"
         print_warn "Use --force-config to overwrite, or --merge-config to add new settings"
@@ -367,9 +495,10 @@ install_config() {
 
     # Install new config
     cp "$config_source" "$config_file"
-    chmod 644 "$config_file"
+    chmod 660 "$config_file"
+    chown root:dvd-ripper "$config_file"
 
-    print_info "✓ Configuration installed to: $config_file"
+    print_info "✓ Configuration installed to: $config_file (mode 660, group dvd-ripper)"
     print_warn ""
     print_warn "*** YOU MUST EDIT THIS FILE TO SET YOUR NAS DETAILS ***"
     print_warn "    sudo nano $config_file"
@@ -395,33 +524,42 @@ install_logrotate() {
 create_directories() {
     print_info "Creating required directories..."
 
-    # Create staging directory
+    # Create staging directory with SGID for group ownership inheritance
     local staging_dir="/var/tmp/dvd-rips"
     if [[ ! -d "$staging_dir" ]]; then
         mkdir -p "$staging_dir"
-        chmod 755 "$staging_dir"
-        print_info "✓ Created staging directory: $staging_dir"
-    else
-        print_info "✓ Staging directory already exists: $staging_dir"
-        # Update permissions on existing directory
-        chmod 755 "$staging_dir"
-        print_info "✓ Updated staging directory permissions to be world-readable"
     fi
+    # Set permissions: rwxrws--- (2770) - SGID ensures new files inherit group
+    chmod 2770 "$staging_dir"
+    chown root:dvd-ripper "$staging_dir"
+    print_info "✓ Staging directory: $staging_dir (mode 2770, group dvd-ripper)"
 
-    # Create log file
+    # Create log file with group write access
     local log_file="/var/log/dvd-ripper.log"
     if [[ ! -f "$log_file" ]]; then
         touch "$log_file"
-        chmod 644 "$log_file"
-        print_info "✓ Created log file: $log_file"
-    else
-        print_info "✓ Log file already exists: $log_file"
     fi
+    chmod 660 "$log_file"
+    chown root:dvd-ripper "$log_file"
+    print_info "✓ Log file: $log_file (mode 660, group dvd-ripper)"
 
-    # Ensure run directory exists (usually does)
-    if [[ ! -d "/var/run" ]]; then
-        mkdir -p "/var/run"
+    # Create runtime directory for lock files
+    local run_dir="/run/dvd-ripper"
+    if [[ ! -d "$run_dir" ]]; then
+        mkdir -p "$run_dir"
     fi
+    chmod 770 "$run_dir"
+    chown root:dvd-ripper "$run_dir"
+    print_info "✓ Runtime directory: $run_dir (mode 770, group dvd-ripper)"
+
+    # Create libdvdcss cache directory (service users have no home dirs)
+    local dvdcss_cache="/var/cache/dvdcss"
+    if [[ ! -d "$dvdcss_cache" ]]; then
+        mkdir -p "$dvdcss_cache"
+    fi
+    chmod 775 "$dvdcss_cache"
+    chown root:dvd-ripper "$dvdcss_cache"
+    print_info "✓ DVD CSS cache: $dvdcss_cache (mode 775, group dvd-ripper)"
 
     print_info "✓ Directories ready"
 }
@@ -452,6 +590,15 @@ install_pipeline_timers() {
 
     local systemd_dir="/etc/systemd/system"
 
+    # Install ISO service template (triggered by udev)
+    if [[ -f "$SCRIPT_DIR/config/dvd-iso@.service" ]]; then
+        cp "$SCRIPT_DIR/config/dvd-iso@.service" "$systemd_dir/"
+        chmod 644 "$systemd_dir/dvd-iso@.service"
+        print_info "✓ dvd-iso@.service installed"
+    else
+        print_warn "dvd-iso@.service not found, skipping"
+    fi
+
     # Install encoder service and timer
     if [[ -f "$SCRIPT_DIR/config/dvd-encoder.service" ]]; then
         cp "$SCRIPT_DIR/config/dvd-encoder.service" "$systemd_dir/"
@@ -480,6 +627,15 @@ install_pipeline_timers() {
         chmod 644 "$systemd_dir/dvd-transfer.timer"
     else
         print_warn "dvd-transfer.timer not found, skipping"
+    fi
+
+    # Install udev control service (for pause/resume via dashboard)
+    if [[ -f "$SCRIPT_DIR/config/dvd-udev-control@.service" ]]; then
+        cp "$SCRIPT_DIR/config/dvd-udev-control@.service" "$systemd_dir/"
+        chmod 644 "$systemd_dir/dvd-udev-control@.service"
+        print_info "✓ dvd-udev-control@.service installed"
+    else
+        print_warn "dvd-udev-control@.service not found, skipping"
     fi
 
     # Reload systemd
@@ -550,6 +706,41 @@ install_web_dashboard() {
         bash "$install_script" "$SCRIPT_DIR"
     else
         print_warn "Dashboard install script not found at $install_script, skipping"
+    fi
+}
+
+install_polkit_rules() {
+    print_info "Installing polkit rules for dashboard..."
+
+    local polkit_dir="/etc/polkit-1/rules.d"
+    local rules_source="$SCRIPT_DIR/config/50-dvd-web.rules"
+    local rules_dest="$polkit_dir/50-dvd-web.rules"
+
+    # Check if polkit is available
+    if [[ ! -d "$polkit_dir" ]]; then
+        print_warn "Polkit rules directory not found - dashboard will require sudo for service control"
+        return 0
+    fi
+
+    if [[ ! -f "$rules_source" ]]; then
+        print_warn "Polkit rules file not found: $rules_source"
+        return 0
+    fi
+
+    cp "$rules_source" "$rules_dest"
+    chmod 644 "$rules_dest"
+    print_info "✓ Polkit rules installed: $rules_dest"
+    print_info "  Dashboard can now manage services without sudo"
+
+    # Install udisks polkit rules for dvd-rip eject
+    local udisks_rules_source="$SCRIPT_DIR/config/51-dvd-rip-udisks.rules"
+    local udisks_rules_dest="$polkit_dir/51-dvd-rip-udisks.rules"
+
+    if [[ -f "$udisks_rules_source" ]]; then
+        cp "$udisks_rules_source" "$udisks_rules_dest"
+        chmod 644 "$udisks_rules_dest"
+        print_info "✓ Polkit udisks rules installed: $udisks_rules_dest"
+        print_info "  dvd-rip can now eject automounted discs"
     fi
 }
 
@@ -791,6 +982,12 @@ main() {
     # Check dependencies
     check_dependencies
 
+    # Create users and groups for v2.0 security model
+    create_users
+
+    # Setup SSH keys for dvd-transfer user (NAS transfers)
+    setup_ssh_keys
+
     # Install components
     install_scripts
     install_config
@@ -806,6 +1003,9 @@ main() {
 
     # Install web dashboard (optional but recommended)
     install_web_dashboard
+
+    # Install polkit rules for dashboard service control
+    install_polkit_rules
 
     # Install lm-sensors for health monitoring (optional)
     install_lm_sensors

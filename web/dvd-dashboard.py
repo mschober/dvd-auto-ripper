@@ -22,7 +22,7 @@ STAGING_DIR = os.environ.get("STAGING_DIR", "/var/tmp/dvd-rips")
 LOG_FILE = os.environ.get("LOG_FILE", "/var/log/dvd-ripper.log")
 CONFIG_FILE = os.environ.get("CONFIG_FILE", "/etc/dvd-ripper.conf")
 PIPELINE_VERSION_FILE = os.environ.get("PIPELINE_VERSION_FILE", "/usr/local/bin/VERSION")
-DASHBOARD_VERSION = "1.6.0"
+DASHBOARD_VERSION = "1.6.1"
 GITHUB_URL = "https://github.com/mschober/dvd-auto-ripper"
 
 LOCK_FILES = {
@@ -1778,7 +1778,7 @@ ARCHITECTURE_HTML = """
 │                                                                             │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  State Files: *.iso-ready → *.encoding → *.encoded-ready → (cleanup)       │
-│  Lock Files:  /var/run/dvd-ripper-{iso,encoder,transfer}.lock              │
+│  Lock Files:  /run/dvd-ripper/{iso,encoder,transfer}.lock                  │
 └─────────────────────────────────────────────────────────────────────────────┘
         </pre>
     </div>
@@ -1868,7 +1868,7 @@ ARCHITECTURE_HTML = """
             <tr><td><code>/var/tmp/dvd-rips/</code></td><td>Staging directory (ISOs, MKVs, state files)</td></tr>
             <tr><td><code>/var/log/dvd-ripper.log</code></td><td>Application log file</td></tr>
             <tr><td><code>/etc/dvd-ripper.conf</code></td><td>Configuration file</td></tr>
-            <tr><td><code>/var/run/dvd-ripper-*.lock</code></td><td>Stage lock files (prevent concurrent runs)</td></tr>
+            <tr><td><code>/run/dvd-ripper/*.lock</code></td><td>Stage lock files (prevent concurrent runs)</td></tr>
             <tr><td><code>/usr/local/bin/dvd-*.sh</code></td><td>Pipeline scripts</td></tr>
         </table>
     </div>
@@ -2632,6 +2632,7 @@ STATUS_HTML = """
 <head>
     <title>Service Status - DVD Ripper</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="refresh" content="30">
     <style>
         * { box-sizing: border-box; }
         body {
@@ -2865,7 +2866,8 @@ STATUS_HTML = """
     <div class="footer">
         Pipeline v{{ pipeline_version }} | Dashboard v{{ dashboard_version }} |
         <a href="{{ github_url }}" target="_blank">dvd-auto-ripper</a> |
-        <a href="/">Back to Dashboard</a>
+        <a href="/">Back to Dashboard</a> |
+        <span title="Page refreshes every 30 seconds">Auto-refresh: 30s</span>
     </div>
 </body>
 </html>
@@ -2933,6 +2935,18 @@ CLUSTER_HTML = """
         }
         .node-card.this-node { border-left-color: #10b981; }
         .node-card.offline { border-left-color: #ef4444; opacity: 0.7; }
+        .node-card.add-worker-card { border-left-color: #6366f1; border-style: dashed; }
+        .remove-peer-btn {
+            background: transparent;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            color: #888;
+            cursor: pointer;
+            font-size: 14px;
+            padding: 2px 6px;
+            transition: all 0.2s;
+        }
+        .remove-peer-btn:hover { background: #fee2e2; border-color: #ef4444; color: #ef4444; }
         .node-header {
             display: flex;
             justify-content: space-between;
@@ -3209,9 +3223,12 @@ CLUSTER_HTML = """
                     <span class="status-dot status-{{ 'online' if peer.online else 'offline' }}"></span>
                     {{ peer.name }}
                 </span>
-                <span class="badge badge-{{ 'online' if peer.online else 'offline' }}">
-                    {{ 'online' if peer.online else 'offline' }}
-                </span>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span class="badge badge-{{ 'online' if peer.online else 'offline' }}">
+                        {{ 'online' if peer.online else 'offline' }}
+                    </span>
+                    <button class="remove-peer-btn" onclick="removePeer('{{ peer.name }}')" title="Remove peer">✕</button>
+                </div>
             </div>
             {% if peer.online and peer.capacity %}
             <div class="node-stats">
@@ -3250,6 +3267,31 @@ CLUSTER_HTML = """
             {% endif %}
         </div>
         {% endfor %}
+
+        <!-- Add Worker Card -->
+        <div class="node-card add-worker-card">
+            <div class="node-header">
+                <span class="node-name">+ Add Worker</span>
+            </div>
+            <div style="padding: 12px 0;">
+                <div style="margin-bottom: 10px;">
+                    <label style="display: block; font-size: 12px; color: #888; margin-bottom: 4px;">Name</label>
+                    <input type="text" id="new-peer-name" placeholder="e.g. plex-server"
+                           style="width: 100%; padding: 8px; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: #fff;">
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <label style="display: block; font-size: 12px; color: #888; margin-bottom: 4px;">Host</label>
+                    <input type="text" id="new-peer-host" placeholder="e.g. 192.168.1.50"
+                           style="width: 100%; padding: 8px; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: #fff;">
+                </div>
+                <div style="margin-bottom: 12px;">
+                    <label style="display: block; font-size: 12px; color: #888; margin-bottom: 4px;">Port</label>
+                    <input type="text" id="new-peer-port" placeholder="5000" value="5000"
+                           style="width: 100%; padding: 8px; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: #fff;">
+                </div>
+                <button onclick="addPeer()" class="action-btn" style="width: 100%;">Add Worker</button>
+            </div>
+        </div>
     </div>
 
     <!-- Distributed Jobs -->
@@ -3379,6 +3421,74 @@ CLUSTER_HTML = """
         setTimeout(function() {
             location.reload();
         }, 30000);
+
+        // Current peers from server (for add/remove operations)
+        const currentPeers = {{ peers_raw | tojson | safe }};
+
+        async function addPeer() {
+            const name = document.getElementById('new-peer-name').value.trim();
+            const host = document.getElementById('new-peer-host').value.trim();
+            const port = document.getElementById('new-peer-port').value.trim() || '5000';
+
+            if (!name || !host) {
+                alert('Name and Host are required');
+                return;
+            }
+
+            // Validate port is numeric
+            if (!/^\d+$/.test(port)) {
+                alert('Port must be a number');
+                return;
+            }
+
+            // Build new peer string
+            const newPeer = `${name}:${host}:${port}`;
+            const updatedPeers = currentPeers ? `${currentPeers} ${newPeer}` : newPeer;
+
+            try {
+                const response = await fetch('/api/config/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ settings: { 'CLUSTER_PEERS': updatedPeers } })
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    window.location.reload();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
+        }
+
+        async function removePeer(peerName) {
+            if (!confirm(`Remove worker "${peerName}" from cluster?`)) {
+                return;
+            }
+
+            // Parse current peers and filter out the one to remove
+            const peers = currentPeers.split(/\s+/).filter(p => p.trim());
+            const updatedPeers = peers.filter(p => !p.startsWith(peerName + ':')).join(' ');
+
+            try {
+                const response = await fetch('/api/config/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ settings: { 'CLUSTER_PEERS': updatedPeers } })
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    window.location.reload();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
+        }
     </script>
     {% endif %}
 </body>
@@ -3998,6 +4108,7 @@ def cluster_page():
         cluster_enabled=config["cluster_enabled"],
         this_node=this_node,
         peers=peers,
+        peers_raw=config["peers_raw"],
         distributed_jobs=get_distributed_jobs(),
         received_jobs=get_received_jobs(),
         io=get_io_stats(),
@@ -4285,19 +4396,20 @@ def api_control_udev(action):
     if action not in ["pause", "resume"]:
         return jsonify({"error": "Invalid action. Use 'pause' or 'resume'"}), 400
 
-    # Use the existing shell scripts for pause/resume
-    script = f"/usr/local/bin/dvd-ripper-trigger-{action}.sh"
+    # Use systemctl to trigger the udev control service
+    # This runs via polkit which allows dvd-web to manage dvd-udev-control@*.service
+    service = f"dvd-udev-control@{action}.service"
 
     try:
         result = subprocess.run(
-            [script],
+            ["systemctl", "start", service],
             capture_output=True, text=True, timeout=10
         )
         success = result.returncode == 0
-        message = result.stdout.strip() or result.stderr.strip()
-    except FileNotFoundError:
-        success = False
-        message = f"Script not found: {script}"
+        if success:
+            message = f"Disc detection {action}d"
+        else:
+            message = result.stderr.strip() or result.stdout.strip() or "Unknown error"
     except subprocess.TimeoutExpired:
         success = False
         message = "Command timed out"

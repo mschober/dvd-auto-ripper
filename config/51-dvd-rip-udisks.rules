@@ -1,0 +1,20 @@
+// Polkit rules for DVD Ripper - Allow dvd-rip to unmount optical discs
+// This enables eject to work when desktop has automounted the disc
+//
+// Installation: /etc/polkit-1/rules.d/51-dvd-rip-udisks.rules
+
+polkit.addRule(function(action, subject) {
+    // Allow dvd-rip user to unmount filesystems (for eject after ISO creation)
+    if (action.id === "org.freedesktop.udisks2.filesystem-unmount-others" &&
+        subject.user === "dvd-rip") {
+        return polkit.Result.YES;
+    }
+
+    // Also allow eject of optical drives
+    if (action.id === "org.freedesktop.udisks2.eject-media" &&
+        subject.user === "dvd-rip") {
+        return polkit.Result.YES;
+    }
+
+    return polkit.Result.NOT_HANDLED;
+});

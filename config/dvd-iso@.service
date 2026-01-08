@@ -1,13 +1,14 @@
 [Unit]
-Description=DVD Ripper for %I (Legacy Mode)
+Description=DVD ISO Creation for %I (Pipeline Stage 1)
+Documentation=https://github.com/mschober/dvd-auto-ripper
 After=multi-user.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/dvd-ripper.sh /dev/%i
+ExecStart=/usr/local/bin/dvd-iso.sh /dev/%i
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=dvd-ripper
+SyslogIdentifier=dvd-iso
 
 # User isolation - run as dvd-rip user (needs DVD device access)
 User=dvd-rip
@@ -24,15 +25,15 @@ RuntimeDirectory=dvd-ripper
 RuntimeDirectoryMode=0775
 RuntimeDirectoryPreserve=yes
 
-# Resource limits (prevent runaway processes)
+# Resource limits
 CPUQuota=80%
 MemoryMax=2G
 TasksMax=32
 IOWeight=50
 Nice=10
 
-# Timeout - give it plenty of time (4 hours for long DVDs)
-TimeoutStartSec=0
+# Timeout - 2 hours for ISO creation
+TimeoutStartSec=2h
 TimeoutStopSec=30
 
 # Don't restart on failure
@@ -45,6 +46,7 @@ Restart=no
 ProtectSystem=true
 ProtectHome=true
 NoNewPrivileges=yes
+PrivateNetwork=true
 
 [Install]
 WantedBy=multi-user.target
