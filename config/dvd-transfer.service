@@ -11,11 +11,33 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=dvd-transfer
 
+# User isolation - run as dvd-transfer user
+User=dvd-transfer
+Group=dvd-ripper
+
+# Runtime directory for lock files (created automatically)
+# Mode 0775 allows all dvd-ripper group members to write lock files
+RuntimeDirectory=dvd-ripper
+RuntimeDirectoryMode=0775
+RuntimeDirectoryPreserve=yes
+
+# Resource limits - network transfer is I/O bound
+CPUQuota=30%
+MemoryMax=512M
+TasksMax=16
+IOWeight=100
+Nice=5
+
 # Reasonable timeout for transfer (1 hour max)
 TimeoutStartSec=1h
 
-# Nice value - lower priority than interactive processes
-Nice=5
+# Security hardening
+# Note: Using 'true' instead of 'strict' to avoid mount namespace issues
+# Note: PrivateTmp disabled - staging dir must be shared between pipeline stages
+ProtectSystem=true
+ProtectHome=read-only
+NoNewPrivileges=yes
+PrivateDevices=true
 
 [Install]
 WantedBy=multi-user.target

@@ -123,7 +123,7 @@ sudo systemctl start dvd-transfer.service  # Transfer now
 
 ```bash
 # Check locks
-ls -la /var/run/dvd-ripper-*.lock
+ls -la /run/dvd-ripper/*.lock
 
 # Service logs
 journalctl -u dvd-encoder.service -f

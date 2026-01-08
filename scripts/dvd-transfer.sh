@@ -249,7 +249,11 @@ transfer_video() {
             if [[ -n "$NAS_FILE_OWNER" ]]; then
                 local remote_file="${NAS_PATH}/$(basename "$mkv_path")"
                 log_info "[TRANSFER] Setting ownership to $NAS_FILE_OWNER on remote"
-                if ssh "${NAS_USER}@${NAS_HOST}" "chown $NAS_FILE_OWNER \"$remote_file\"" 2>/dev/null; then
+                local ssh_cmd="ssh"
+                if [[ -n "${NAS_SSH_IDENTITY:-}" ]] && [[ -f "$NAS_SSH_IDENTITY" ]]; then
+                    ssh_cmd="ssh -i $NAS_SSH_IDENTITY"
+                fi
+                if $ssh_cmd "${NAS_USER}@${NAS_HOST}" "chown $NAS_FILE_OWNER \"$remote_file\"" 2>/dev/null; then
                     log_info "[TRANSFER] Ownership set successfully"
                 else
                     log_warn "[TRANSFER] Failed to set ownership (continuing anyway)"

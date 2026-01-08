@@ -28,8 +28,8 @@ for svc in $(systemctl list-units --type=service --state=running --no-legend | g
 done
 
 # Clean up stale files
-rm -f /var/run/dvd-ripper.pid 2>/dev/null && echo "  Removed PID file"
-rm -f /var/run/dvd-ripper.lock 2>/dev/null && echo "  Removed lock file"
+rm -f /run/dvd-ripper/*.lock 2>/dev/null && echo "  Removed lock files"
+rm -f /run/dvd-ripper/*.pid 2>/dev/null && echo "  Removed PID files"
 
 # Reset failed units
 systemctl reset-failed 2>/dev/null || true

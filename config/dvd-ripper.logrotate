@@ -21,7 +21,7 @@
     notifempty
 
     # Create new log file with these permissions after rotation
-    create 0640 root adm
+    create 0660 root dvd-ripper
 
     # Use date as suffix for rotated logs
     dateext

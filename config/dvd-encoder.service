@@ -10,15 +10,38 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=dvd-encoder
 
+# User isolation - run as dvd-encode user
+User=dvd-encode
+Group=dvd-ripper
+
+# libdvdcss cache directory (user has no home dir)
+Environment=DVDCSS_CACHE=/var/cache/dvdcss
+Environment=HOME=/var/cache/dvdcss
+
+# Runtime directory for lock files (created automatically)
+# Mode 0775 allows all dvd-ripper group members to write lock files
+RuntimeDirectory=dvd-ripper
+RuntimeDirectoryMode=0775
+RuntimeDirectoryPreserve=yes
+
 # Resource limits - encoding is CPU intensive
 CPUQuota=80%
 MemoryMax=4G
+TasksMax=256
+IOWeight=30
+Nice=10
 
 # Long timeout for encoding (4 hours max)
 TimeoutStartSec=4h
 
-# Nice value - lower priority than interactive processes
-Nice=10
+# Security hardening
+# Note: Using 'true' instead of 'strict' to avoid mount namespace issues
+# Note: PrivateTmp disabled - staging dir must be shared between pipeline stages
+ProtectSystem=true
+ProtectHome=true
+NoNewPrivileges=yes
+PrivateDevices=true
+PrivateNetwork=true
 
 [Install]
 WantedBy=multi-user.target

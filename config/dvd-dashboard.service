@@ -12,9 +12,21 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=dvd-dashboard
 
-# Run as root to allow systemctl commands for triggering stages
-User=root
-Group=root
+# User isolation - run as dvd-web user
+User=dvd-web
+Group=dvd-ripper
+
+# Runtime directory for lock files (created automatically)
+# Mode 0775 allows all dvd-ripper group members to write lock files
+RuntimeDirectory=dvd-ripper
+RuntimeDirectoryMode=0775
+RuntimeDirectoryPreserve=yes
+
+# Resource limits - dashboard is lightweight
+CPUQuota=20%
+MemoryMax=256M
+TasksMax=32
+IOWeight=10
 
 # Environment configuration
 Environment=FLASK_HOST=0.0.0.0
@@ -23,6 +35,15 @@ Environment=STAGING_DIR=/var/tmp/dvd-rips
 Environment=LOG_FILE=/var/log/dvd-ripper.log
 Environment=CONFIG_FILE=/etc/dvd-ripper.conf
 Environment=PIPELINE_VERSION_FILE=/usr/local/bin/VERSION
+
+# Security hardening
+# Note: Using 'true' (not 'full') to allow writes to /etc/dvd-ripper.conf
+ProtectSystem=true
+ProtectHome=true
+NoNewPrivileges=yes
+PrivateDevices=true
+CapabilityBoundingSet=
+# Access control via group membership (dvd-ripper group)
 
 [Install]
 WantedBy=multi-user.target

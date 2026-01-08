@@ -12,7 +12,7 @@ fi
 STAGING_DIR="${STAGING_DIR:-/var/tmp/dvd-rips}"
 LOG_FILE="${LOG_FILE:-/var/log/dvd-ripper.log}"
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
-LOCK_FILE="${LOCK_FILE:-/var/run/dvd-ripper.pid}"
+LOCK_FILE="${LOCK_FILE:-/run/dvd-ripper/dvd-ripper.pid}"
 MAX_RETRIES="${MAX_RETRIES:-3}"
 RETRY_DELAY="${RETRY_DELAY:-60}"
 DISK_USAGE_THRESHOLD="${DISK_USAGE_THRESHOLD:-80}"
@@ -452,13 +452,28 @@ transfer_to_nas() {
         return 1
     fi
 
+    # Build SSH options with identity file if configured
+    local ssh_opts=""
+    if [[ -n "${NAS_SSH_IDENTITY:-}" ]] && [[ -f "$NAS_SSH_IDENTITY" ]]; then
+        ssh_opts="-i $NAS_SSH_IDENTITY"
+        log_debug "Using SSH identity file: $NAS_SSH_IDENTITY"
+    fi
+
     while [[ $attempt -le $MAX_RETRIES ]]; do
         log_info "Transfer attempt $attempt/$MAX_RETRIES: $filename to ${NAS_USER}@${NAS_HOST}:${NAS_PATH}"
 
         if [[ "$NAS_TRANSFER_METHOD" == "rsync" ]]; then
-            rsync -avz --progress "$local_file" "${NAS_USER}@${NAS_HOST}:${NAS_PATH}/"
+            if [[ -n "$ssh_opts" ]]; then
+                rsync -avz --progress -e "ssh $ssh_opts" "$local_file" "${NAS_USER}@${NAS_HOST}:${NAS_PATH}/"
+            else
+                rsync -avz --progress "$local_file" "${NAS_USER}@${NAS_HOST}:${NAS_PATH}/"
+            fi
         else
-            scp "$local_file" "${NAS_USER}@${NAS_HOST}:${remote_path}"
+            if [[ -n "$ssh_opts" ]]; then
+                scp $ssh_opts "$local_file" "${NAS_USER}@${NAS_HOST}:${remote_path}"
+            else
+                scp "$local_file" "${NAS_USER}@${NAS_HOST}:${remote_path}"
+            fi
         fi
 
         if [[ $? -eq 0 ]]; then
@@ -466,7 +481,12 @@ transfer_to_nas() {
 
             # Verify remote file size matches
             local local_size=$(stat -c%s "$local_file")
-            local remote_size=$(ssh "${NAS_USER}@${NAS_HOST}" "stat -c%s \"${remote_path}\"" 2>/dev/null)
+            local remote_size
+            if [[ -n "$ssh_opts" ]]; then
+                remote_size=$(ssh $ssh_opts "${NAS_USER}@${NAS_HOST}" "stat -c%s \"${remote_path}\"" 2>/dev/null)
+            else
+                remote_size=$(ssh "${NAS_USER}@${NAS_HOST}" "stat -c%s \"${remote_path}\"" 2>/dev/null)
+            fi
 
             if [[ "$local_size" == "$remote_size" ]]; then
                 log_info "Transfer verification passed"
@@ -493,16 +513,46 @@ transfer_to_nas() {
 
 # Eject disc from device
 # Usage: eject_disc DEVICE
-# TODO: Fix eject to handle waiting/retrying while device becomes available.
-#       After ddrescue completes, the device may still be busy. Need to:
-#       1. Wait for device to become available (not busy)
-#       2. Retry eject with backoff if it fails
-#       3. Handle "device busy" errors gracefully
+#
+# Handles desktop-automounted discs by using udisksctl for unmount (uses polkit)
+# before ejecting. Falls back to direct eject if udisksctl unavailable.
 eject_disc() {
     local device="$1"
+    local block_device
+
+    # Normalize device path (e.g., /dev/sr0)
+    block_device=$(readlink -f "$device")
+
     log_info "Ejecting disc from $device"
-    eject "$device" 2>&1 | tee -a "$LOG_FILE"
-    return ${PIPESTATUS[0]}
+
+    # First, try to unmount using udisksctl (works with polkit, no root needed)
+    # This handles desktop-automounted discs at /media/username/...
+    if command -v udisksctl &>/dev/null; then
+        log_debug "Attempting unmount via udisksctl"
+        if udisksctl unmount -b "$block_device" 2>&1 | tee -a "$LOG_FILE"; then
+            log_debug "udisksctl unmount successful"
+        else
+            # Not an error - disc might not be mounted
+            log_debug "udisksctl unmount returned non-zero (disc may not be mounted)"
+        fi
+    fi
+
+    # Now eject - retry a few times in case device is briefly busy
+    local attempt
+    for attempt in 1 2 3; do
+        if eject "$block_device" 2>&1 | tee -a "$LOG_FILE"; then
+            log_info "Disc ejected successfully"
+            return 0
+        fi
+
+        if [[ $attempt -lt 3 ]]; then
+            log_debug "Eject attempt $attempt failed, retrying in 2s..."
+            sleep 2
+        fi
+    done
+
+    log_error "Failed to eject disc after 3 attempts"
+    return 1
 }
 
 # Wait for device to be ready
@@ -525,6 +575,93 @@ wait_for_device() {
 
     log_error "Device not ready after ${timeout}s"
     return 1
+}
+
+# ============================================================================
+# CSS Key Management
+# ============================================================================
+
+# Get the dvdcss cache directory for a disc by volume label
+# Usage: get_dvdcss_cache_dir VOLUME_LABEL
+# Returns: Path to most recently modified cache dir, or empty if not found
+get_dvdcss_cache_dir() {
+    local volume_label="$1"
+    local cache_dir="${DVDCSS_CACHE:-/var/cache/dvdcss}"
+
+    if [[ -z "$volume_label" ]]; then
+        return 1
+    fi
+
+    # Find matching cache directory (most recently modified, exclude -0000000000)
+    find "$cache_dir" -maxdepth 1 -type d -name "${volume_label}-*" \
+        ! -name "*-0000000000" \
+        -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-
+}
+
+# Package CSS keys alongside ISO file for cluster distribution
+# Usage: package_dvdcss_keys ISO_PATH VOLUME_LABEL
+# Creates: ISO_PATH.keys/ directory containing CSS decryption keys
+package_dvdcss_keys() {
+    local iso_path="$1"
+    local volume_label="$2"
+    local keys_dir="${iso_path}.keys"
+
+    local cache_dir=$(get_dvdcss_cache_dir "$volume_label")
+    if [[ -z "$cache_dir" || ! -d "$cache_dir" ]]; then
+        log_warn "No dvdcss cache found for volume label: $volume_label"
+        return 1
+    fi
+
+    mkdir -p "$keys_dir"
+    cp -a "$cache_dir"/* "$keys_dir/" 2>/dev/null
+
+    # Store the original cache dir name for reference (needed for import)
+    basename "$cache_dir" > "$keys_dir/.disc_id"
+
+    # Set ownership to match ISO file
+    chown -R "$(stat -c '%U:%G' "$iso_path")" "$keys_dir" 2>/dev/null
+
+    local key_count=$(find "$keys_dir" -maxdepth 1 -type f ! -name '.disc_id' | wc -l)
+    log_info "Packaged $key_count CSS keys to $keys_dir"
+    return 0
+}
+
+# Import CSS keys from ISO sidecar to local dvdcss cache
+# Usage: import_dvdcss_keys ISO_PATH
+# Copies keys from ISO_PATH.keys/ to local cache with -0000000000 suffix
+import_dvdcss_keys() {
+    local iso_path="$1"
+    local keys_dir="${iso_path}.keys"
+    local cache_dir="${DVDCSS_CACHE:-/var/cache/dvdcss}"
+
+    if [[ ! -d "$keys_dir" ]]; then
+        log_debug "No keys directory found at $keys_dir"
+        return 1
+    fi
+
+    # Read the original disc ID
+    local disc_id=""
+    if [[ -f "$keys_dir/.disc_id" ]]; then
+        disc_id=$(cat "$keys_dir/.disc_id")
+    fi
+
+    if [[ -z "$disc_id" ]]; then
+        log_warn "No disc ID found in $keys_dir/.disc_id"
+        return 1
+    fi
+
+    # Create cache directory for ISO access pattern (-0000000000 suffix)
+    # Extract base name without suffix (e.g., DVD_VIDEO-xxx from DVD_VIDEO-xxx-1762a2987d)
+    local base_name="${disc_id%-*}"
+    local iso_cache_dir="$cache_dir/${base_name}-0000000000"
+
+    mkdir -p "$iso_cache_dir"
+    cp -n "$keys_dir"/* "$iso_cache_dir/" 2>/dev/null  # -n = don't overwrite
+    rm -f "$iso_cache_dir/.disc_id"  # Don't keep the metadata file in cache
+
+    local key_count=$(find "$iso_cache_dir" -maxdepth 1 -type f | wc -l)
+    log_info "Imported $key_count CSS keys to $iso_cache_dir"
+    return 0
 }
 
 # ============================================================================
@@ -583,9 +720,9 @@ init_logging() {
 # ============================================================================
 
 # Default lock file paths for pipeline mode
-ISO_LOCK_FILE="${ISO_LOCK_FILE:-/var/run/dvd-ripper-iso.lock}"
-ENCODER_LOCK_FILE="${ENCODER_LOCK_FILE:-/var/run/dvd-ripper-encoder.lock}"
-TRANSFER_LOCK_FILE="${TRANSFER_LOCK_FILE:-/var/run/dvd-ripper-transfer.lock}"
+ISO_LOCK_FILE="${ISO_LOCK_FILE:-/run/dvd-ripper/iso.lock}"
+ENCODER_LOCK_FILE="${ENCODER_LOCK_FILE:-/run/dvd-ripper/encoder.lock}"
+TRANSFER_LOCK_FILE="${TRANSFER_LOCK_FILE:-/run/dvd-ripper/transfer.lock}"
 
 # Acquire stage-specific lock (non-blocking)
 # Usage: acquire_stage_lock STAGE
@@ -617,6 +754,7 @@ acquire_stage_lock() {
     fi
 
     echo "$$" > "$lock_file"
+    chmod 664 "$lock_file" 2>/dev/null  # Group-writable for multi-user access
     log_debug "Acquired $stage lock with PID $$"
     return 0
 }
@@ -689,7 +827,7 @@ should_start_encoder() {
 count_active_encoders() {
     local count=0
     for i in $(seq 1 "$MAX_PARALLEL_ENCODERS"); do
-        local lock_file="/var/run/dvd-ripper-encoder-${i}.lock"
+        local lock_file="/run/dvd-ripper/encoder-${i}.lock"
         if [[ -f "$lock_file" ]]; then
             local pid=$(cat "$lock_file" 2>/dev/null)
             if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
@@ -720,7 +858,7 @@ acquire_encoder_slot() {
 
     # Try to find an available slot
     for i in $(seq 1 "$MAX_PARALLEL_ENCODERS"); do
-        local lock_file="/var/run/dvd-ripper-encoder-${i}.lock"
+        local lock_file="/run/dvd-ripper/encoder-${i}.lock"
 
         if [[ -f "$lock_file" ]]; then
             local existing_pid=$(cat "$lock_file" 2>/dev/null)
@@ -736,6 +874,7 @@ acquire_encoder_slot() {
 
         # Try to claim this slot
         echo "$$" > "$lock_file"
+        chmod 664 "$lock_file" 2>/dev/null  # Group-writable for multi-user access
         log_info "Acquired encoder slot $i with PID $$"
         echo "$i"
         return 0
@@ -756,7 +895,7 @@ release_encoder_slot() {
         return
     fi
 
-    local lock_file="/var/run/dvd-ripper-encoder-${slot}.lock"
+    local lock_file="/run/dvd-ripper/encoder-${slot}.lock"
     if [[ -f "$lock_file" ]]; then
         rm -f "$lock_file"
         log_debug "Released encoder slot $slot"
@@ -868,10 +1007,11 @@ transition_state() {
 # Parse JSON field from state metadata (simple bash parsing)
 # Usage: parse_json_field METADATA FIELD
 # Returns: field value or empty string
+# Note: Uses || true to handle empty values without failing under set -e
 parse_json_field() {
     local metadata="$1"
     local field="$2"
-    echo "$metadata" | grep -oP "\"$field\":\s*\"?\K[^\",$}]+" | head -1
+    echo "$metadata" | grep -oP "\"$field\":\s*\"?\K[^\",$}]+" 2>/dev/null | head -1 || true
 }
 
 # ============================================================================
@@ -1028,6 +1168,15 @@ distribute_to_peer() {
     fi
 
     log_info "[CLUSTER] ISO transferred to $peer_name"
+
+    # Also transfer CSS keys directory if it exists (for cluster decryption)
+    if [[ -d "${iso_path}.keys" ]]; then
+        if rsync -avz "${iso_path}.keys" "$remote_dest" >> "$LOG_FILE" 2>&1; then
+            log_info "[CLUSTER] CSS keys transferred to $peer_name"
+        else
+            log_warn "[CLUSTER] Could not transfer CSS keys to $peer_name (encoding may need to crack keys)"
+        fi
+    fi
 
     # Update metadata with distribution info
     local new_metadata=$(update_metadata_for_distribution "$metadata" "$CLUSTER_NODE_NAME" "$peer_name")
