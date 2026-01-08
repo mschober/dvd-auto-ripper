@@ -22,7 +22,7 @@ STAGING_DIR = os.environ.get("STAGING_DIR", "/var/tmp/dvd-rips")
 LOG_FILE = os.environ.get("LOG_FILE", "/var/log/dvd-ripper.log")
 CONFIG_FILE = os.environ.get("CONFIG_FILE", "/etc/dvd-ripper.conf")
 PIPELINE_VERSION_FILE = os.environ.get("PIPELINE_VERSION_FILE", "/usr/local/bin/VERSION")
-DASHBOARD_VERSION = "1.6.0"
+DASHBOARD_VERSION = "1.6.1"
 GITHUB_URL = "https://github.com/mschober/dvd-auto-ripper"
 
 LOCK_FILES = {
@@ -2632,6 +2632,7 @@ STATUS_HTML = """
 <head>
     <title>Service Status - DVD Ripper</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="refresh" content="30">
     <style>
         * { box-sizing: border-box; }
         body {
@@ -2865,7 +2866,8 @@ STATUS_HTML = """
     <div class="footer">
         Pipeline v{{ pipeline_version }} | Dashboard v{{ dashboard_version }} |
         <a href="{{ github_url }}" target="_blank">dvd-auto-ripper</a> |
-        <a href="/">Back to Dashboard</a>
+        <a href="/">Back to Dashboard</a> |
+        <span title="Page refreshes every 30 seconds">Auto-refresh: 30s</span>
     </div>
 </body>
 </html>
