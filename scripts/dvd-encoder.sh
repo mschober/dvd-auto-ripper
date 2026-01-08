@@ -24,6 +24,41 @@ PREVIEW_START_PERCENT="${PREVIEW_START_PERCENT:-25}"
 PREVIEW_RESOLUTION="${PREVIEW_RESOLUTION:-640:360}"
 
 # ============================================================================
+# DVD CSS Cache Cleanup
+# ============================================================================
+
+# Clear partial dvdcss cache directories to force fresh key cracking
+#
+# libdvdcss computes different disc IDs when reading from physical disc vs ISO:
+#   - Physical disc: DVD_VIDEO-xxx-1762a2987d (random suffix)
+#   - ISO file:      DVD_VIDEO-xxx-0000000000 (zeros suffix)
+#
+# This causes cache misses because Stage 1 (ISO creation) caches keys under
+# the physical disc ID, but Stage 2 (encoding) looks under the ISO disc ID.
+#
+# Solution: Remove -0000000000 directories so libdvdcss cracks keys fresh.
+# See docs/troubleshooting-dvdcss-cache.md for details.
+clear_partial_dvdcss_cache() {
+    local cache_dir="${DVDCSS_CACHE:-/var/cache/dvdcss}"
+
+    if [[ ! -d "$cache_dir" ]]; then
+        return 0
+    fi
+
+    # Find and remove directories ending with -0000000000 (ISO-derived, often incomplete)
+    local removed=0
+    while IFS= read -r -d '' dir; do
+        log_debug "[ENCODER] Removing partial dvdcss cache: $dir"
+        rm -rf "$dir"
+        ((removed++)) || true
+    done < <(find "$cache_dir" -maxdepth 1 -type d -name '*-0000000000' -print0 2>/dev/null)
+
+    if [[ $removed -gt 0 ]]; then
+        log_info "[ENCODER] Cleared $removed partial dvdcss cache director(ies)"
+    fi
+}
+
+# ============================================================================
 # Preview Generation Function
 # ============================================================================
 
@@ -315,6 +350,9 @@ main() {
 
     # Check for recovery scenarios
     check_encoder_recovery
+
+    # Clear partial dvdcss cache to avoid disc ID mismatch issues
+    clear_partial_dvdcss_cache
 
     # Find oldest iso-ready state file
     local state_file=$(find_oldest_state "iso-ready")
