@@ -27,7 +27,7 @@ RuntimeDirectoryPreserve=yes
 # Resource limits - encoding is CPU intensive
 CPUQuota=80%
 MemoryMax=4G
-TasksMax=64
+TasksMax=256
 IOWeight=30
 Nice=10
 
