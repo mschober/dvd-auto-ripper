@@ -37,11 +37,12 @@ TimeoutStartSec=4h
 # Security hardening
 # Note: Using 'true' instead of 'strict' to avoid mount namespace issues
 # Note: PrivateTmp disabled - staging dir must be shared between pipeline stages
+# Note: ProtectHome=read-only allows reading SSH keys for cluster distribution
+# Note: PrivateNetwork disabled - cluster distribution needs network access
 ProtectSystem=true
-ProtectHome=true
+ProtectHome=read-only
 NoNewPrivileges=yes
 PrivateDevices=true
-PrivateNetwork=true
 
 [Install]
 WantedBy=multi-user.target
