@@ -3,6 +3,8 @@ Description=DVD Transfer Service (Pipeline Stage 3)
 Documentation=https://github.com/mschober/dvd-auto-ripper
 After=network-online.target
 Wants=network-online.target
+# Refuse to start if transfer is already running (lock file exists)
+ConditionPathExists=!/run/dvd-ripper/transfer.lock
 
 [Service]
 Type=oneshot

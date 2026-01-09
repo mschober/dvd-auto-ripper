@@ -2,6 +2,8 @@
 Description=DVD Cluster Distributor (Pipeline Stage 2a)
 After=network-online.target
 Wants=network-online.target
+# Refuse to start if distribution is already running (lock file exists)
+ConditionPathExists=!/run/dvd-ripper/distribute.lock
 
 [Service]
 Type=oneshot
