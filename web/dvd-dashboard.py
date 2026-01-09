@@ -30,7 +30,7 @@ LOCK_FILES = {
     "encoder": "/run/dvd-ripper/encoder.lock",
     "transfer": "/run/dvd-ripper/transfer.lock"
 }
-STATE_ORDER = ["iso-creating", "iso-ready", "encoding", "encoded-ready", "transferring", "transferred"]
+STATE_ORDER = ["iso-creating", "iso-ready", "distributing", "encoding", "encoded-ready", "transferring", "transferred"]
 
 # Generic title detection patterns (items needing identification)
 GENERIC_PATTERNS = [
@@ -185,13 +185,17 @@ def get_lock_status():
 def get_active_progress():
     """
     Parse recent logs to extract progress for active processes.
-    Returns dict with progress info for iso, encoder, and transfer stages.
+    Returns dict with progress info for iso, encoder, distributing, and transfer stages.
     """
-    progress = {"iso": None, "encoder": None, "transfer": None}
+    progress = {"iso": None, "encoder": None, "distributing": None, "transfer": None}
     locks = get_lock_status()
 
+    # Check for distributing state files (cluster distribution in progress)
+    distributing_files = glob.glob(os.path.join(STAGING_DIR, "*.distributing"))
+    is_distributing = len(distributing_files) > 0
+
     # Only parse if something is actually running
-    if not any(s["active"] for s in locks.values()):
+    if not any(s["active"] for s in locks.values()) and not is_distributing:
         return progress
 
     # Read more lines to catch progress updates
@@ -199,7 +203,7 @@ def get_active_progress():
 
     # Parse HandBrake encoding progress
     # Pattern: "Encoding: task X of Y, XX.XX % (XX.XX fps, avg XX.XX fps, ETA XXhXXmXXs)"
-    if locks.get("encoder", {}).get("active"):
+    if locks.get("encoder", {}).get("active") and not is_distributing:
         # Find all encoding lines and get the most recent one
         encoder_matches = re.findall(
             r'Encoding:.*?(\d+\.?\d*)\s*%.*?(\d+\.?\d*)\s*fps.*?ETA\s*(\d+h\d+m\d+s|\d+m\d+s)',
@@ -225,6 +229,21 @@ def get_active_progress():
             progress["iso"] = {
                 "percent": float(last_match[0]),
                 "eta": last_match[1] if last_match[1] != "n/a" else "finishing..."
+            }
+
+    # Parse rsync cluster distribution progress (during encoder lock with .distributing file)
+    # Pattern: "XXX,XXX,XXX  XX%  XX.XXMB/s    X:XX:XX"
+    if is_distributing:
+        dist_matches = re.findall(
+            r'(\d+)%\s+([\d.]+[KMG]?B/s)\s+(\d+:\d+:\d+)',
+            logs
+        )
+        if dist_matches:
+            last_match = dist_matches[-1]
+            progress["distributing"] = {
+                "percent": float(last_match[0]),
+                "speed": last_match[1],
+                "eta": last_match[2]
             }
 
     # Parse rsync transfer progress
@@ -1437,6 +1456,7 @@ DASHBOARD_HTML = """
         }
         .state-iso-creating { background: #fed7aa; color: #9a3412; }
         .state-iso-ready { background: #fef3c7; color: #92400e; }
+        .state-distributing { background: #fce7f3; color: #9d174d; }
         .state-encoding { background: #dbeafe; color: #1e40af; }
         .state-encoded-ready { background: #d1fae5; color: #065f46; }
         .state-transferring { background: #ede9fe; color: #5b21b6; }
@@ -1479,6 +1499,7 @@ DASHBOARD_HTML = """
         .progress-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
         .progress-iso { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
         .progress-encoder { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
+        .progress-distributing { background: linear-gradient(90deg, #ec4899, #f472b6); }
         .progress-transfer { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
         .queue-empty { color: #666; font-style: italic; padding: 20px 0; }
         a { color: #3b82f6; text-decoration: none; }
@@ -1582,6 +1603,17 @@ DASHBOARD_HTML = """
                     </div>
                 </div>
                 {% endif %}
+                {% if progress.distributing %}
+                <div class="progress-item">
+                    <div class="progress-header">
+                        <span class="progress-label">Distributing to Cluster</span>
+                        <span class="progress-stats">{{ "%.1f"|format(progress.distributing.percent) }}% | {{ progress.distributing.speed }} | ETA: {{ progress.distributing.eta }}</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill progress-distributing" style="width: {{ progress.distributing.percent }}%"></div>
+                    </div>
+                </div>
+                {% endif %}
                 {% if progress.transfer %}
                 <div class="progress-item">
                     <div class="progress-header">
@@ -1593,7 +1625,7 @@ DASHBOARD_HTML = """
                     </div>
                 </div>
                 {% endif %}
-                {% if not progress.iso and not progress.encoder and not progress.transfer %}
+                {% if not progress.iso and not progress.encoder and not progress.distributing and not progress.transfer %}
                 <p style="color: #666; font-size: 13px; margin: 12px 0 0 0;">No active operations</p>
                 {% endif %}
             </div>
@@ -1683,6 +1715,19 @@ DASHBOARD_HTML = """
                         </div>`;
                 }
 
+                if (data.distributing) {
+                    html += `
+                        <div class="progress-item">
+                            <div class="progress-header">
+                                <span class="progress-label">Distributing to Cluster</span>
+                                <span class="progress-stats">${data.distributing.percent.toFixed(1)}% | ${data.distributing.speed} | ETA: ${data.distributing.eta}</span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-fill progress-distributing" style="width: ${data.distributing.percent}%"></div>
+                            </div>
+                        </div>`;
+                }
+
                 if (data.transfer) {
                     html += `
                         <div class="progress-item">
@@ -1696,7 +1741,7 @@ DASHBOARD_HTML = """
                         </div>`;
                 }
 
-                if (!data.iso && !data.encoder && !data.transfer) {
+                if (!data.iso && !data.encoder && !data.distributing && !data.transfer) {
                     html = '<p style="color: #666; font-size: 13px; margin: 12px 0 0 0;">No active operations</p>';
                 }
 
