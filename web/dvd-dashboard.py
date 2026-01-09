@@ -1155,7 +1155,7 @@ def trigger_service(stage):
     service_name = f"dvd-{stage}.service"
     try:
         result = subprocess.run(
-            ["systemctl", "start", service_name],
+            ["systemctl", "start", "--no-block", service_name],
             capture_output=True, text=True, timeout=10
         )
         return result.returncode == 0, result.stderr.strip() or "OK"
