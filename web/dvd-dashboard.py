@@ -28,7 +28,18 @@ GITHUB_URL = "https://github.com/mschober/dvd-auto-ripper"
 LOCK_FILES = {
     "iso": "/run/dvd-ripper/iso.lock",
     "encoder": "/run/dvd-ripper/encoder.lock",
-    "transfer": "/run/dvd-ripper/transfer.lock"
+    "transfer": "/run/dvd-ripper/transfer.lock",
+    "distribute": "/run/dvd-ripper/distribute.lock"
+}
+
+# State configuration for cancellation and reversion
+STATE_CONFIG = {
+    "iso-creating": {"lock": "iso", "revert_to": None},
+    "iso-ready": {"lock": None, "revert_to": None},
+    "distributing": {"lock": "distribute", "revert_to": "iso-ready"},
+    "encoding": {"lock": "encoder", "revert_to": "iso-ready"},
+    "encoded-ready": {"lock": None, "revert_to": None},
+    "transferring": {"lock": "transfer", "revert_to": "encoded-ready"},
 }
 STATE_ORDER = ["iso-creating", "iso-ready", "distributing", "encoding", "encoded-ready", "transferring", "transferred"]
 
@@ -687,7 +698,16 @@ def kill_process_with_cleanup(pid):
     Kill a DVD ripper process and clean up associated state.
     Returns tuple of (success, message).
     """
+    import time
     pid = int(pid)
+
+    # Map process type to state name
+    PROCESS_TO_STATE = {
+        "encoder": "encoding",
+        "iso": "iso-creating",
+        "transfer": "transferring",
+        "distribute": "distributing"
+    }
 
     # First verify this is one of our processes
     processes = get_dvd_processes()
@@ -701,36 +721,18 @@ def kill_process_with_cleanup(pid):
         return False, f"PID {pid} is not a DVD ripper process"
 
     process_type = target_process.get("type", "unknown")
+    state_name = PROCESS_TO_STATE.get(process_type)
+    config = STATE_CONFIG.get(state_name, {}) if state_name else {}
 
-    # Try to find associated lock file
-    lock_file = None
-    if process_type == "encoder":
-        lock_file = LOCK_FILES.get("encoder")
-    elif process_type == "iso":
-        lock_file = LOCK_FILES.get("iso")
-    elif process_type == "transfer":
-        lock_file = LOCK_FILES.get("transfer")
-
-    # Find associated state file for cleanup
-    state_to_revert = None
-    revert_to = None
-
-    if process_type == "encoder":
-        state_to_revert = "encoding"
-        revert_to = "iso-ready"
-    elif process_type == "iso":
-        state_to_revert = "iso-creating"
-        revert_to = None  # Just remove, disc can be re-inserted
-    elif process_type == "transfer":
-        state_to_revert = "transferring"
-        revert_to = "encoded-ready"
+    # Get lock file from STATE_CONFIG
+    lock_stage = config.get("lock")
+    lock_file = LOCK_FILES.get(lock_stage) if lock_stage else None
 
     try:
         # Send SIGTERM first
         os.kill(pid, 15)  # SIGTERM
 
         # Wait a moment for graceful shutdown
-        import time
         time.sleep(2)
 
         # Check if still running, send SIGKILL if needed
@@ -747,22 +749,15 @@ def kill_process_with_cleanup(pid):
             except Exception:
                 pass
 
-        # Revert state files
+        # Revert state files using STATE_CONFIG
         cleanup_msg = ""
-        if state_to_revert:
-            pattern = os.path.join(STAGING_DIR, f"*.{state_to_revert}")
+        if state_name:
+            revert_to = config.get("revert_to")
+            pattern = os.path.join(STAGING_DIR, f"*.{state_name}")
             for state_file in glob.glob(pattern):
                 try:
-                    if revert_to:
-                        # Rename to previous state
-                        base = state_file.rsplit('.', 1)[0]
-                        new_state_file = f"{base}.{revert_to}"
-                        os.rename(state_file, new_state_file)
-                        cleanup_msg += f" Reverted {os.path.basename(state_file)} to {revert_to}."
-                    else:
-                        # Just remove the state file
-                        os.remove(state_file)
-                        cleanup_msg += f" Removed {os.path.basename(state_file)}."
+                    _, msg = revert_state_file(state_file, revert_to)
+                    cleanup_msg += f" {msg}."
                 except Exception as e:
                     cleanup_msg += f" Failed to clean up {os.path.basename(state_file)}: {e}"
 
@@ -774,6 +769,142 @@ def kill_process_with_cleanup(pid):
         return False, f"Permission denied to kill PID {pid}"
     except Exception as e:
         return False, f"Failed to kill PID {pid}: {e}"
+
+
+def revert_state_file(state_file_path, new_state):
+    """
+    Revert a state file to a previous state, or remove it.
+    Returns (new_path or None, message).
+    """
+    basename = os.path.basename(state_file_path)
+    if new_state is None:
+        os.remove(state_file_path)
+        return None, f"Removed {basename}"
+    else:
+        base = state_file_path.rsplit('.', 1)[0]
+        new_state_file = f"{base}.{new_state}"
+        os.rename(state_file_path, new_state_file)
+        return new_state_file, f"Reverted {basename} to {new_state}"
+
+
+def find_process_for_lock(lock_stage):
+    """Find PID of process from lock file if it's still running."""
+    if lock_stage not in LOCK_FILES:
+        return None
+    lock_file = LOCK_FILES[lock_stage]
+    if not os.path.exists(lock_file):
+        return None
+    try:
+        with open(lock_file, 'r') as f:
+            pid = int(f.read().strip())
+        if os.path.exists(f"/proc/{pid}"):
+            return pid
+    except (ValueError, IOError):
+        pass
+    return None
+
+
+def cancel_queue_item(state_file_name, delete_files=False):
+    """
+    Cancel a queue item by state file name.
+    Handles process killing and state reversion based on current state.
+    Returns (success, message).
+    """
+    import time
+
+    state_file_path = os.path.join(STAGING_DIR, state_file_name)
+
+    if not os.path.exists(state_file_path):
+        return False, "State file not found"
+
+    # Extract state from filename
+    state = state_file_name.rsplit('.', 1)[-1]
+
+    if state not in STATE_CONFIG:
+        return False, f"Unknown or non-cancellable state: {state}"
+
+    config = STATE_CONFIG[state]
+
+    # Read metadata for file paths
+    try:
+        with open(state_file_path, 'r') as f:
+            metadata = json.load(f)
+    except (json.JSONDecodeError, IOError):
+        metadata = {}
+
+    messages = []
+
+    # Handle active processes
+    if config["lock"]:
+        pid = find_process_for_lock(config["lock"])
+        if pid:
+            try:
+                os.kill(pid, 15)  # SIGTERM
+                time.sleep(2)
+                try:
+                    os.kill(pid, 0)
+                    os.kill(pid, 9)  # SIGKILL if still running
+                except ProcessLookupError:
+                    pass
+                messages.append(f"Killed process {pid}")
+            except PermissionError:
+                messages.append(f"Permission denied killing PID {pid}")
+            except Exception as e:
+                messages.append(f"Could not kill process: {e}")
+
+        # Clean up lock file
+        lock_file = LOCK_FILES[config["lock"]]
+        if os.path.exists(lock_file):
+            try:
+                os.remove(lock_file)
+            except Exception:
+                pass
+
+    # Clean up partial files for active states
+    if state == "iso-creating":
+        iso_path = metadata.get("iso_path")
+        if iso_path and os.path.exists(iso_path):
+            try:
+                os.remove(iso_path)
+                messages.append("Removed partial ISO")
+            except Exception:
+                pass
+    elif state == "encoding":
+        mkv_path = metadata.get("mkv_path")
+        if mkv_path and os.path.exists(mkv_path):
+            try:
+                os.remove(mkv_path)
+                messages.append("Removed partial MKV")
+            except Exception:
+                pass
+
+    # Handle optional file deletion for queued states
+    if delete_files:
+        if state == "iso-ready":
+            iso_path = metadata.get("iso_path")
+            if iso_path and os.path.exists(iso_path):
+                try:
+                    os.remove(iso_path)
+                    messages.append("Deleted ISO file")
+                except Exception as e:
+                    messages.append(f"Could not delete ISO: {e}")
+        elif state == "encoded-ready":
+            mkv_path = metadata.get("mkv_path")
+            if mkv_path and os.path.exists(mkv_path):
+                try:
+                    os.remove(mkv_path)
+                    messages.append("Deleted MKV file")
+                except Exception as e:
+                    messages.append(f"Could not delete MKV: {e}")
+
+    # Revert or remove state file
+    try:
+        _, msg = revert_state_file(state_file_path, config["revert_to"])
+        messages.append(msg)
+    except Exception as e:
+        return False, f"Failed to update state file: {e}"
+
+    return True, ". ".join(messages)
 
 
 def read_config():
@@ -1018,7 +1149,7 @@ DROPDOWN_SETTINGS = {
 
 def trigger_service(stage):
     """Trigger a systemd service."""
-    if stage not in ["encoder", "transfer"]:
+    if stage not in ["encoder", "transfer", "distribute"]:
         return False, "Invalid stage"
 
     service_name = f"dvd-{stage}.service"
@@ -1471,6 +1602,25 @@ DASHBOARD_HTML = """
         .btn-primary { background: #3b82f6; color: white; }
         .btn-primary:hover { background: #2563eb; }
         .btn-primary:disabled { background: #9ca3af; cursor: not-allowed; }
+        /* Queue action buttons */
+        .queue-actions { white-space: nowrap; }
+        .btn-sm { padding: 4px 8px; font-size: 11px; margin: 0 2px; }
+        .btn-distribute { background: #8b5cf6; color: white; }
+        .btn-distribute:hover { background: #7c3aed; }
+        .btn-distribute:disabled { background: #9ca3af; cursor: not-allowed; }
+        .btn-cancel { background: #ef4444; color: white; font-weight: bold; min-width: 24px; }
+        .btn-cancel:hover { background: #dc2626; }
+        /* Cancel modal */
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                         background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center; }
+        .modal-overlay.active { display: flex; }
+        .modal { background: white; padding: 24px; border-radius: 8px; max-width: 400px; width: 90%; }
+        .modal h3 { margin: 0 0 16px 0; }
+        .modal-buttons { display: flex; gap: 12px; margin-top: 20px; justify-content: flex-end; }
+        .btn-modal-cancel { background: #e5e7eb; color: #374151; }
+        .btn-modal-cancel:hover { background: #d1d5db; }
+        .btn-modal-confirm { background: #ef4444; color: white; }
+        .btn-modal-confirm:hover { background: #dc2626; }
         pre {
             background: #1e1e1e; color: #d4d4d4; padding: 12px;
             overflow-x: auto; border-radius: 4px; font-size: 11px;
@@ -1636,13 +1786,28 @@ DASHBOARD_HTML = """
         <h2>Queue ({{ queue|length }} items)</h2>
         {% if queue %}
         <table>
-            <tr><th>Title</th><th>Year</th><th>State</th><th>Created</th></tr>
+            <tr><th>Title</th><th>Year</th><th>State</th><th>Created</th><th style="width: 120px;">Actions</th></tr>
             {% for item in queue %}
             <tr>
                 <td>{{ item.metadata.get('title', 'Unknown') | replace('_', ' ') }}</td>
                 <td>{{ item.metadata.get('year', '-') or '-' }}</td>
                 <td><span class="status-badge state-{{ item.state }}">{{ item.state }}</span></td>
                 <td style="font-size: 12px; color: #666;">{{ item.metadata.get('created_at', 'N/A')[:19] }}</td>
+                <td class="queue-actions">
+                    {% if item.state == 'iso-ready' and cluster_enabled %}
+                    <button class="btn btn-sm btn-distribute" onclick="triggerDistribute()"
+                            {% if locks.distribute and locks.distribute.active %}disabled title="Distribution in progress"{% endif %}>
+                        Distribute
+                    </button>
+                    {% endif %}
+                    {% if item.state in ['iso-creating', 'iso-ready', 'distributing', 'encoding', 'encoded-ready', 'transferring'] %}
+                    <button class="btn btn-sm btn-cancel"
+                            onclick="confirmCancel('{{ item.file }}', '{{ item.state }}', '{{ item.metadata.get('title', 'Unknown') | replace('_', ' ') | e }}')"
+                            title="Cancel">
+                        &times;
+                    </button>
+                    {% endif %}
+                </td>
             </tr>
             {% endfor %}
         </table>
@@ -1752,7 +1917,97 @@ DASHBOARD_HTML = """
 
     // Update progress every 10 seconds
     setInterval(updateProgress, 10000);
+
+    // Queue action handlers
+    let cancelTarget = null;
+
+    function confirmCancel(stateFile, state, title) {
+        cancelTarget = { stateFile, state, title };
+        document.getElementById('cancel-title').textContent = title;
+
+        const warning = document.getElementById('cancel-warning');
+        const deleteOption = document.getElementById('delete-files-option');
+
+        if (['iso-creating', 'encoding', 'distributing', 'transferring'].includes(state)) {
+            warning.textContent = 'This will kill the running process and may leave partial files.';
+            warning.style.display = 'block';
+            deleteOption.style.display = 'none';
+        } else if (['iso-ready', 'encoded-ready'].includes(state)) {
+            warning.style.display = 'none';
+            deleteOption.style.display = 'block';
+            document.getElementById('delete-files-checkbox').checked = false;
+        } else {
+            warning.style.display = 'none';
+            deleteOption.style.display = 'none';
+        }
+
+        document.getElementById('cancel-modal').classList.add('active');
+    }
+
+    function closeCancelModal() {
+        document.getElementById('cancel-modal').classList.remove('active');
+        cancelTarget = null;
+    }
+
+    async function executeCancel() {
+        if (!cancelTarget) return;
+
+        const checkbox = document.getElementById('delete-files-checkbox');
+        const deleteFiles = checkbox ? checkbox.checked : false;
+
+        try {
+            const response = await fetch('/api/queue/' + encodeURIComponent(cancelTarget.stateFile) + '/cancel', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({delete_files: deleteFiles})
+            });
+
+            if (response.ok) {
+                location.reload();
+            } else {
+                const result = await response.json();
+                alert('Cancel failed: ' + (result.error || 'Unknown error'));
+            }
+        } catch (e) {
+            alert('Request failed: ' + e.message);
+        }
+
+        closeCancelModal();
+    }
+
+    function triggerDistribute() {
+        fetch('/api/trigger/distribute', { method: 'POST' })
+            .then(response => {
+                if (response.ok) {
+                    location.reload();
+                } else {
+                    return response.json().then(data => {
+                        alert('Failed to trigger distribute: ' + (data.error || 'Unknown error'));
+                    });
+                }
+            })
+            .catch(e => alert('Request failed: ' + e.message));
+    }
     </script>
+
+    <!-- Cancel Modal -->
+    <div id="cancel-modal" class="modal-overlay">
+        <div class="modal">
+            <h3>Cancel Queue Item</h3>
+            <p>Are you sure you want to cancel <strong id="cancel-title"></strong>?</p>
+            <p id="cancel-warning" style="color: #f59e0b; display: none;"></p>
+            <div id="delete-files-option" style="margin: 12px 0; display: none;">
+                <label>
+                    <input type="checkbox" id="delete-files-checkbox">
+                    Also delete media file (ISO/MKV)
+                </label>
+            </div>
+            <div class="modal-buttons">
+                <button class="btn btn-modal-cancel" onclick="closeCancelModal()">Keep Item</button>
+                <button class="btn btn-modal-confirm" onclick="executeCancel()">Cancel Item</button>
+            </div>
+        </div>
+    </div>
 </body>
 </html>
 """
@@ -3968,6 +4223,7 @@ def dashboard():
     message = request.args.get("message")
     message_type = request.args.get("type", "success")
 
+    cluster_config = get_cluster_config()
     return render_template_string(
         DASHBOARD_HTML,
         counts=count_by_state(),
@@ -3982,7 +4238,8 @@ def dashboard():
         pending_identification=len(get_pending_identification()),
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
-        github_url=GITHUB_URL
+        github_url=GITHUB_URL,
+        cluster_enabled=cluster_config.get("cluster_enabled", False)
     )
 
 
@@ -4302,6 +4559,29 @@ def api_trigger(stage):
     # JSON response for API calls
     if success:
         return jsonify({"status": "triggered", "stage": stage})
+    else:
+        return jsonify({"error": message}), 500
+
+
+@app.route("/api/queue/<path:state_file>/cancel", methods=["POST"])
+def api_cancel_queue_item(state_file):
+    """API: Cancel/remove a queue item by state file name."""
+    data = request.get_json() or {}
+    delete_files = data.get('delete_files', False)
+
+    success, message = cancel_queue_item(state_file, delete_files)
+
+    # If called from form, redirect back to dashboard
+    if request.headers.get("Accept", "").startswith("text/html") or \
+       request.content_type != "application/json":
+        if success:
+            return redirect(url_for("dashboard", message=message, type="success"))
+        else:
+            return redirect(url_for("dashboard", message=f"Cancel failed: {message}", type="error"))
+
+    # JSON response for API calls
+    if success:
+        return jsonify({"status": "ok", "message": message})
     else:
         return jsonify({"error": message}), 500
 
