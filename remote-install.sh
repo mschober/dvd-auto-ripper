@@ -931,6 +931,22 @@ install_polkit_rules() {
         print_info "✓ Polkit udisks rules installed: $udisks_rules_dest"
         print_info "  dvd-rip can now eject automounted discs"
     fi
+
+    # Install sudoers rule for dvd-web to kill processes (for cancel functionality)
+    local sudoers_source="$SCRIPT_DIR/config/dvd-web-sudoers"
+    local sudoers_dest="/etc/sudoers.d/dvd-web"
+
+    if [[ -f "$sudoers_source" ]]; then
+        # Validate sudoers file syntax before installing
+        if visudo -c -f "$sudoers_source" >/dev/null 2>&1; then
+            cp "$sudoers_source" "$sudoers_dest"
+            chmod 440 "$sudoers_dest"
+            print_info "✓ Sudoers rules installed: $sudoers_dest"
+            print_info "  dvd-web can now cancel running jobs"
+        else
+            print_warn "Sudoers file has syntax errors, skipping: $sudoers_source"
+        fi
+    fi
 }
 
 setup_local_transfer_permissions() {

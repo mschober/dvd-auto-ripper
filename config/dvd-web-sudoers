@@ -1,0 +1,10 @@
+# Sudoers rules for DVD Ripper Web Dashboard
+# Allows dvd-web user to kill DVD ripper processes for cancel functionality
+#
+# Installation: /etc/sudoers.d/dvd-web
+#
+# This is needed because the dashboard runs as dvd-web but pipeline
+# processes run as dvd-rip, dvd-encode, and dvd-transfer users.
+
+# Allow dvd-web to kill processes (for cancel functionality)
+dvd-web ALL=(root) NOPASSWD: /usr/bin/kill

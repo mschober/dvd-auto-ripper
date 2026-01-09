@@ -838,37 +838,38 @@ def cancel_queue_item(state_file_name, delete_files=False):
     if config["lock"]:
         pid = find_process_for_lock(config["lock"])
         if pid:
+            # Use sudo to kill process group (handles cross-user processes)
+            # Negative PID signals the entire process group
             try:
-                # Kill the entire process group to ensure child processes
-                # (like ddrescue, HandBrakeCLI) are also terminated
-                try:
-                    pgid = os.getpgid(pid)
-                    os.killpg(pgid, 15)  # SIGTERM to process group
-                    messages.append(f"Sent SIGTERM to process group {pgid}")
-                except (ProcessLookupError, PermissionError):
-                    # Fall back to killing just the main process
-                    os.kill(pid, 15)
-                    messages.append(f"Sent SIGTERM to process {pid}")
+                pgid = os.getpgid(pid)
+            except (ProcessLookupError, OSError):
+                pgid = pid  # Fall back to PID if can't get PGID
 
-                time.sleep(2)
+            # SIGTERM to process group
+            result = subprocess.run(
+                ["sudo", "kill", "-TERM", f"-{pgid}"],
+                capture_output=True, text=True
+            )
+            if result.returncode == 0:
+                messages.append(f"Sent SIGTERM to process group {pgid}")
+            else:
+                # Try killing just the main process
+                subprocess.run(["sudo", "kill", "-TERM", str(pid)], capture_output=True)
+                messages.append(f"Sent SIGTERM to process {pid}")
 
-                # Check if main process is still running, SIGKILL if needed
-                try:
-                    os.kill(pid, 0)  # Check if alive
-                    # Still running, try SIGKILL on process group
-                    try:
-                        pgid = os.getpgid(pid)
-                        os.killpg(pgid, 9)  # SIGKILL to process group
-                        messages.append(f"Sent SIGKILL to process group {pgid}")
-                    except (ProcessLookupError, PermissionError):
-                        os.kill(pid, 9)
-                        messages.append(f"Sent SIGKILL to process {pid}")
-                except ProcessLookupError:
-                    pass  # Process already terminated
-            except PermissionError:
-                messages.append(f"Permission denied killing PID {pid}")
-            except Exception as e:
-                messages.append(f"Could not kill process: {e}")
+            time.sleep(2)
+
+            # Check if main process is still running, SIGKILL if needed
+            if os.path.exists(f"/proc/{pid}"):
+                result = subprocess.run(
+                    ["sudo", "kill", "-9", f"-{pgid}"],
+                    capture_output=True, text=True
+                )
+                if result.returncode == 0:
+                    messages.append(f"Sent SIGKILL to process group {pgid}")
+                else:
+                    subprocess.run(["sudo", "kill", "-9", str(pid)], capture_output=True)
+                    messages.append(f"Sent SIGKILL to process {pid}")
 
         # Clean up lock file
         lock_file = LOCK_FILES[config["lock"]]
