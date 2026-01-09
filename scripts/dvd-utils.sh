@@ -277,13 +277,36 @@ get_dvd_info() {
     # Line format: [HH:MM:SS] libdvdnav: DVD Title: THE_MATRIX
     local title=$(echo "$scan_output" | grep -oP 'libdvdnav: DVD Title: \K.*' | head -1 | xargs)
 
-    # Extract main title number (longest title)
-    local main_title=$(echo "$scan_output" | grep "^+ title" | \
-        grep -oP '\+ title \K\d+' | head -1)
+    # Extract main title number (actually find the longest title by duration)
+    # Parse "+ title N:" and "  + duration: HH:MM:SS" pairs
+    local main_title duration
+    read -r main_title duration < <(echo "$scan_output" | awk '
+        /^\+ title [0-9]+:/ {
+            title = $3
+            gsub(/:/, "", title)
+        }
+        /^  \+ duration:/ && title {
+            dur = $3
+            # Convert duration to seconds for comparison
+            split(dur, t, ":")
+            secs = t[1]*3600 + t[2]*60 + t[3]
+            if (secs > max_secs) {
+                max_secs = secs
+                max_title = title
+                max_dur = dur
+            }
+            title = ""
+        }
+        END {
+            if (max_title) print max_title, max_dur
+        }
+    ')
 
-    # Extract duration
-    local duration=$(echo "$scan_output" | grep "duration:" | head -1 | \
-        grep -oP 'duration: \K[0-9:]+')
+    # Fallback if parsing failed
+    if [[ -z "$main_title" ]]; then
+        main_title=$(echo "$scan_output" | grep "^+ title" | grep -oP '\+ title \K\d+' | head -1)
+        duration=$(echo "$scan_output" | grep "duration:" | head -1 | grep -oP 'duration: \K[0-9:]+')
+    fi
 
     # Extract year from title if present
     local year=""
