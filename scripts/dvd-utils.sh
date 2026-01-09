@@ -487,15 +487,15 @@ transfer_to_nas() {
 
         if [[ "$NAS_TRANSFER_METHOD" == "rsync" ]]; then
             if [[ -n "$ssh_opts" ]]; then
-                rsync -avz --progress -e "ssh $ssh_opts" "$local_file" "${NAS_USER}@${NAS_HOST}:${NAS_PATH}/"
+                rsync -avz --progress -e "ssh $ssh_opts" "$local_file" "${NAS_USER}@${NAS_HOST}:${NAS_PATH}/" >> "$LOG_FILE" 2>&1
             else
-                rsync -avz --progress "$local_file" "${NAS_USER}@${NAS_HOST}:${NAS_PATH}/"
+                rsync -avz --progress "$local_file" "${NAS_USER}@${NAS_HOST}:${NAS_PATH}/" >> "$LOG_FILE" 2>&1
             fi
         else
             if [[ -n "$ssh_opts" ]]; then
-                scp $ssh_opts "$local_file" "${NAS_USER}@${NAS_HOST}:${remote_path}"
+                scp $ssh_opts "$local_file" "${NAS_USER}@${NAS_HOST}:${remote_path}" >> "$LOG_FILE" 2>&1
             else
-                scp "$local_file" "${NAS_USER}@${NAS_HOST}:${remote_path}"
+                scp "$local_file" "${NAS_USER}@${NAS_HOST}:${remote_path}" >> "$LOG_FILE" 2>&1
             fi
         fi
 
