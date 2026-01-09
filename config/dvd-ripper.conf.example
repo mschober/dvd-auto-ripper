@@ -160,6 +160,7 @@ PIPELINE_MODE="1"
 ISO_LOCK_FILE="/run/dvd-ripper/iso.lock"
 ENCODER_LOCK_FILE="/run/dvd-ripper/encoder.lock"
 TRANSFER_LOCK_FILE="/run/dvd-ripper/transfer.lock"
+DISTRIBUTE_LOCK_FILE="/run/dvd-ripper/distribute.lock"
 
 # Event-driven triggers (pipeline mode)
 # When enabled, each stage automatically triggers the next stage via systemctl

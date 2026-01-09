@@ -323,55 +323,6 @@ check_encoder_recovery() {
 }
 
 # ============================================================================
-# Cluster Distribution (called before acquiring local slot)
-# ============================================================================
-
-# Attempt to distribute a pending job to an available cluster peer.
-# This is called BEFORE acquiring a local encoder slot, allowing distribution
-# even when the local encoder is already busy.
-# Does NOT exit - allows caller to continue with local encoding after.
-try_cluster_distribution() {
-    # Skip if cluster not enabled or no peers configured
-    if [[ "$CLUSTER_ENABLED" != "1" ]] || [[ -z "$CLUSTER_PEERS" ]]; then
-        return
-    fi
-
-    # Only distribute if there are multiple pending jobs
-    # (keeps one for local processing, sends extras to peers)
-    local pending=$(count_pending_state "iso-ready")
-    if [[ "$pending" -lt 2 ]]; then
-        log_debug "[ENCODER] Only $pending job(s) pending, skipping cluster distribution"
-        return
-    fi
-
-    log_info "[ENCODER] Cluster mode: $pending pending jobs, checking peers..."
-
-    # Find an available peer
-    local peer
-    peer=$(find_available_peer)
-    if [[ $? -ne 0 ]] || [[ -z "$peer" ]]; then
-        log_info "[ENCODER] No cluster peers available"
-        return
-    fi
-
-    # Get oldest state file for distribution
-    local state_file
-    state_file=$(find_oldest_state "iso-ready")
-    if [[ -z "$state_file" ]]; then
-        log_warn "[ENCODER] No state files found despite count=$pending"
-        return
-    fi
-
-    # Attempt distribution
-    log_info "[ENCODER] Distributing to peer: $peer"
-    if distribute_to_peer "$state_file" "$peer"; then
-        log_info "[ENCODER] Job distributed to cluster peer"
-    else
-        log_warn "[ENCODER] Cluster distribution failed"
-    fi
-}
-
-# ============================================================================
 # Main Entry Point
 # ============================================================================
 
@@ -397,10 +348,6 @@ main() {
         local active_encoders=$(count_active_encoders)
         log_info "[ENCODER] Parallel encoding enabled: max=$MAX_PARALLEL_ENCODERS, active=$active_encoders"
     fi
-
-    # Try cluster distribution BEFORE acquiring local slot
-    # This allows distributing to idle peers even when local encoder is busy
-    try_cluster_distribution
 
     # Try to acquire an encoder slot (supports both legacy and parallel modes)
     ENCODER_SLOT=$(acquire_encoder_slot)

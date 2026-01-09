@@ -263,6 +263,30 @@ create_users() {
         print_info "✓ Created SSH directory: $ssh_dir"
     fi
 
+    # Create dvd-distribute user (Stage 2a: Cluster distribution, needs SSH keys)
+    if ! getent passwd dvd-distribute >/dev/null 2>&1; then
+        useradd --system \
+            --gid dvd-ripper \
+            --home-dir /var/lib/dvd-distribute \
+            --create-home \
+            --shell /usr/sbin/nologin \
+            --comment "DVD Ripper - Cluster Distribution" \
+            dvd-distribute
+        print_info "✓ Created user: dvd-distribute (group: dvd-ripper)"
+    else
+        usermod -g dvd-ripper dvd-distribute 2>/dev/null || true
+        print_info "  User dvd-distribute already exists"
+    fi
+
+    # Create SSH directory for dvd-distribute (cluster communication)
+    local distribute_ssh_dir="/var/lib/dvd-distribute/.ssh"
+    if [[ ! -d "$distribute_ssh_dir" ]]; then
+        mkdir -p "$distribute_ssh_dir"
+        chmod 700 "$distribute_ssh_dir"
+        chown dvd-distribute:dvd-ripper "$distribute_ssh_dir"
+        print_info "✓ Created SSH directory: $distribute_ssh_dir"
+    fi
+
     # Create dvd-web user (Web dashboard)
     if ! getent passwd dvd-web >/dev/null 2>&1; then
         useradd --system \
@@ -281,8 +305,9 @@ create_users() {
     print_info "✓ User setup complete"
 }
 
-# Generate SSH key for dvd-transfer user (NAS transfers)
+# Generate SSH keys for transfer and distribution users
 setup_ssh_keys() {
+    # Setup SSH key for dvd-transfer (NAS transfers)
     print_info "Setting up SSH keys for dvd-transfer user..."
 
     local ssh_dir="/var/lib/dvd-transfer/.ssh"
@@ -310,6 +335,29 @@ setup_ssh_keys() {
         print_warn ""
     else
         print_info "✓ SSH key already exists: $key_file"
+    fi
+
+    # Setup SSH key for dvd-distribute (cluster distribution)
+    print_info "Setting up SSH keys for dvd-distribute user..."
+
+    local distribute_ssh_dir="/var/lib/dvd-distribute/.ssh"
+    local distribute_key_file="${distribute_ssh_dir}/id_ed25519"
+
+    # Ensure directory exists with correct permissions
+    if [[ ! -d "$distribute_ssh_dir" ]]; then
+        mkdir -p "$distribute_ssh_dir"
+        chmod 700 "$distribute_ssh_dir"
+        chown dvd-distribute:dvd-ripper "$distribute_ssh_dir"
+    fi
+
+    # Generate SSH key if it doesn't exist
+    if [[ ! -f "$distribute_key_file" ]]; then
+        print_info "Generating SSH key for dvd-distribute user..."
+        sudo -u dvd-distribute ssh-keygen -t ed25519 -f "$distribute_key_file" -N "" -C "dvd-distribute@$(hostname)"
+        print_info "✓ SSH key generated: $distribute_key_file"
+        print_info "  (For cluster mode: add this key to peer nodes' dvd-transfer authorized_keys)"
+    else
+        print_info "✓ SSH key already exists: $distribute_key_file"
     fi
 }
 
@@ -406,10 +454,11 @@ install_scripts() {
     cp "$SCRIPT_DIR/scripts/dvd-ripper-trigger-resume.sh" "$INSTALL_BIN/"
     cp "$SCRIPT_DIR/scripts/dvd-dashboard-ctl.sh" "$INSTALL_BIN/"
 
-    # Copy pipeline scripts (3-stage mode)
+    # Copy pipeline scripts (3-stage mode + cluster distribution)
     cp "$SCRIPT_DIR/scripts/dvd-iso.sh" "$INSTALL_BIN/"
     cp "$SCRIPT_DIR/scripts/dvd-encoder.sh" "$INSTALL_BIN/"
     cp "$SCRIPT_DIR/scripts/dvd-transfer.sh" "$INSTALL_BIN/"
+    cp "$SCRIPT_DIR/scripts/dvd-distribute.sh" "$INSTALL_BIN/"
 
     # Copy VERSION file for pipeline version tracking
     if [[ -f "$SCRIPT_DIR/scripts/VERSION" ]]; then
@@ -428,12 +477,14 @@ install_scripts() {
     chmod 755 "$INSTALL_BIN/dvd-iso.sh"
     chmod 755 "$INSTALL_BIN/dvd-encoder.sh"
     chmod 755 "$INSTALL_BIN/dvd-transfer.sh"
+    chmod 755 "$INSTALL_BIN/dvd-distribute.sh"
     chmod 644 "$INSTALL_BIN/dvd-utils.sh"
 
     print_info "✓ Scripts installed successfully"
     print_info "  - dvd-ripper.sh (legacy monolithic mode)"
     print_info "  - dvd-iso.sh (pipeline stage 1: ISO creation)"
     print_info "  - dvd-encoder.sh (pipeline stage 2: encoding)"
+    print_info "  - dvd-distribute.sh (pipeline stage 2a: cluster distribution)"
     print_info "  - dvd-transfer.sh (pipeline stage 3: NAS transfer)"
 }
 
@@ -629,6 +680,21 @@ install_pipeline_timers() {
         print_warn "dvd-transfer.timer not found, skipping"
     fi
 
+    # Install distribute service and timer (cluster mode)
+    if [[ -f "$SCRIPT_DIR/config/dvd-distribute.service" ]]; then
+        cp "$SCRIPT_DIR/config/dvd-distribute.service" "$systemd_dir/"
+        chmod 644 "$systemd_dir/dvd-distribute.service"
+    else
+        print_warn "dvd-distribute.service not found, skipping"
+    fi
+
+    if [[ -f "$SCRIPT_DIR/config/dvd-distribute.timer" ]]; then
+        cp "$SCRIPT_DIR/config/dvd-distribute.timer" "$systemd_dir/"
+        chmod 644 "$systemd_dir/dvd-distribute.timer"
+    else
+        print_warn "dvd-distribute.timer not found, skipping"
+    fi
+
     # Install udev control service (for pause/resume via dashboard)
     if [[ -f "$SCRIPT_DIR/config/dvd-udev-control@.service" ]]; then
         cp "$SCRIPT_DIR/config/dvd-udev-control@.service" "$systemd_dir/"
@@ -652,6 +718,12 @@ install_pipeline_timers() {
         systemctl enable dvd-transfer.timer
         systemctl start dvd-transfer.timer
         print_info "✓ dvd-transfer.timer enabled and started"
+    fi
+
+    if [[ -f "$systemd_dir/dvd-distribute.timer" ]]; then
+        systemctl enable dvd-distribute.timer
+        systemctl start dvd-distribute.timer
+        print_info "✓ dvd-distribute.timer enabled and started"
     fi
 
     print_info "✓ Pipeline timers installed (run every 15 minutes)"

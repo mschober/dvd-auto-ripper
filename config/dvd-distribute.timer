@@ -1,0 +1,18 @@
+[Unit]
+Description=DVD Cluster Distributor Timer
+
+[Timer]
+# Start 3 minutes after boot
+OnBootSec=3min
+
+# Run every 15 minutes
+OnUnitActiveSec=15min
+
+# Add random delay to avoid thundering herd
+RandomizedDelaySec=30
+
+# Catch up on missed runs
+Persistent=true
+
+[Install]
+WantedBy=timers.target

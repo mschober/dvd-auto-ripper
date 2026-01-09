@@ -1,0 +1,35 @@
+[Unit]
+Description=DVD Cluster Distributor (Pipeline Stage 2a)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/dvd-distribute.sh
+User=dvd-distribute
+Group=dvd-ripper
+
+# Runtime directory (shared with other dvd-ripper services)
+RuntimeDirectory=dvd-ripper
+RuntimeDirectoryMode=0775
+RuntimeDirectoryPreserve=yes
+
+# Resource limits (network-bound, not CPU-intensive)
+CPUQuota=30%
+MemoryMax=512M
+TasksMax=16
+IOWeight=50
+Nice=5
+
+# Long timeout for large ISO transfers
+TimeoutStartSec=3h
+
+# Security hardening
+# Note: ProtectHome=read-only allows reading SSH keys for cluster communication
+ProtectSystem=true
+ProtectHome=read-only
+NoNewPrivileges=yes
+PrivateDevices=true
+
+[Install]
+WantedBy=multi-user.target

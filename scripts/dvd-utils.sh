@@ -1047,27 +1047,29 @@ trigger_next_stage() {
         return 0
     fi
 
-    local target_service=""
+    local target_services=""
     case "$current_state" in
         iso-ready)
-            target_service="dvd-encoder.service"
+            # Trigger both encoder AND distributor in parallel
+            target_services="dvd-encoder.service dvd-distribute.service"
             ;;
         encoded-ready)
-            target_service="dvd-transfer.service"
+            target_services="dvd-transfer.service"
             ;;
         *)
             return 0
             ;;
     esac
 
-    log_info "[TRIGGER] Starting $target_service"
-    if systemctl start "$target_service" 2>/dev/null; then
-        log_info "[TRIGGER] $target_service started"
-        return 0
-    else
-        log_warn "[TRIGGER] Failed to start $target_service (may already be running)"
-        return 0  # Non-fatal - timer will pick it up
-    fi
+    for service in $target_services; do
+        log_info "[TRIGGER] Starting $service"
+        if systemctl start "$service" 2>/dev/null; then
+            log_info "[TRIGGER] $service started"
+        else
+            log_warn "[TRIGGER] Failed to start $service (may already be running)"
+        fi
+    done
+    return 0
 }
 
 # ============================================================================
