@@ -839,32 +839,14 @@ def cancel_queue_item(state_file_name, delete_files=False):
         pid = find_process_for_lock(config["lock"])
         if pid:
             try:
-                # Kill the entire process group to ensure child processes
-                # (like ddrescue, HandBrakeCLI) are also terminated
-                try:
-                    pgid = os.getpgid(pid)
-                    os.killpg(pgid, 15)  # SIGTERM to process group
-                    messages.append(f"Sent SIGTERM to process group {pgid}")
-                except (ProcessLookupError, PermissionError):
-                    # Fall back to killing just the main process
-                    os.kill(pid, 15)
-                    messages.append(f"Sent SIGTERM to process {pid}")
-
+                os.kill(pid, 15)  # SIGTERM
                 time.sleep(2)
-
-                # Check if main process is still running, SIGKILL if needed
                 try:
-                    os.kill(pid, 0)  # Check if alive
-                    # Still running, try SIGKILL on process group
-                    try:
-                        pgid = os.getpgid(pid)
-                        os.killpg(pgid, 9)  # SIGKILL to process group
-                        messages.append(f"Sent SIGKILL to process group {pgid}")
-                    except (ProcessLookupError, PermissionError):
-                        os.kill(pid, 9)
-                        messages.append(f"Sent SIGKILL to process {pid}")
+                    os.kill(pid, 0)
+                    os.kill(pid, 9)  # SIGKILL if still running
                 except ProcessLookupError:
-                    pass  # Process already terminated
+                    pass
+                messages.append(f"Killed process {pid}")
             except PermissionError:
                 messages.append(f"Permission denied killing PID {pid}")
             except Exception as e:
