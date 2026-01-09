@@ -7,6 +7,7 @@
 #   --force-config       Overwrite existing configuration file (creates backup)
 #   --merge-config       Merge new config options into existing config (keeps user settings)
 #   --install-libdvdcss  Install libdvdcss for encrypted DVD support (Debian/Ubuntu)
+#   --setup-cluster-peer HOST  Setup SSH keys with a cluster peer node
 
 # ==============================================================================
 # DEFAULT INSTALLATION PATHS
@@ -37,6 +38,7 @@ set -euo pipefail
 FORCE_CONFIG=false
 MERGE_CONFIG=false
 INSTALL_LIBDVDCSS=false
+SETUP_CLUSTER_PEER=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --force-config)
@@ -51,9 +53,17 @@ while [[ $# -gt 0 ]]; do
             INSTALL_LIBDVDCSS=true
             shift
             ;;
+        --setup-cluster-peer)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --setup-cluster-peer requires a HOST argument"
+                exit 1
+            fi
+            SETUP_CLUSTER_PEER="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: sudo ./remote-install.sh [--force-config] [--merge-config] [--install-libdvdcss]"
+            echo "Usage: sudo ./remote-install.sh [--force-config] [--merge-config] [--install-libdvdcss] [--setup-cluster-peer HOST]"
             exit 1
             ;;
     esac
@@ -313,11 +323,27 @@ setup_ssh_keys() {
     local ssh_dir="/var/lib/dvd-transfer/.ssh"
     local key_file="${ssh_dir}/id_ed25519"
 
+    # Ensure dvd-transfer has a login shell (needed to accept rsync connections)
+    local current_shell=$(getent passwd dvd-transfer | cut -d: -f7)
+    if [[ "$current_shell" == "/usr/sbin/nologin" ]] || [[ "$current_shell" == "/bin/false" ]]; then
+        usermod -s /bin/bash dvd-transfer
+        print_info "✓ Set dvd-transfer shell to /bin/bash (required for cluster rsync)"
+    fi
+
     # Ensure directory exists with correct permissions
     if [[ ! -d "$ssh_dir" ]]; then
         mkdir -p "$ssh_dir"
         chmod 700 "$ssh_dir"
         chown dvd-transfer:dvd-ripper "$ssh_dir"
+    fi
+
+    # Create authorized_keys if it doesn't exist (for receiving cluster connections)
+    local auth_keys="${ssh_dir}/authorized_keys"
+    if [[ ! -f "$auth_keys" ]]; then
+        touch "$auth_keys"
+        chmod 600 "$auth_keys"
+        chown dvd-transfer:dvd-ripper "$auth_keys"
+        print_info "✓ Created authorized_keys for dvd-transfer"
     fi
 
     # Generate SSH key if it doesn't exist
@@ -355,9 +381,63 @@ setup_ssh_keys() {
         print_info "Generating SSH key for dvd-distribute user..."
         sudo -u dvd-distribute ssh-keygen -t ed25519 -f "$distribute_key_file" -N "" -C "dvd-distribute@$(hostname)"
         print_info "✓ SSH key generated: $distribute_key_file"
-        print_info "  (For cluster mode: add this key to peer nodes' dvd-transfer authorized_keys)"
+        print_info "  (For cluster mode: run --setup-cluster-peer to exchange keys with peers)"
     else
         print_info "✓ SSH key already exists: $distribute_key_file"
+    fi
+}
+
+# Setup SSH keys between this node and a cluster peer
+# This enables dvd-distribute on this node to rsync to dvd-transfer on the peer
+setup_cluster_peer() {
+    local peer_host="$1"
+    local peer_user="${2:-$(whoami)}"  # User to SSH as for setup (needs sudo on peer)
+
+    print_info "Setting up cluster peer connection to $peer_host..."
+
+    local distribute_ssh_dir="/var/lib/dvd-distribute/.ssh"
+    local distribute_key_file="${distribute_ssh_dir}/id_ed25519"
+    local known_hosts="${distribute_ssh_dir}/known_hosts"
+
+    # Verify local key exists
+    if [[ ! -f "$distribute_key_file" ]]; then
+        print_error "Local dvd-distribute SSH key not found. Run install first."
+        return 1
+    fi
+
+    local local_pubkey=$(cat "${distribute_key_file}.pub")
+
+    # Add peer's host key to known_hosts
+    print_info "Adding $peer_host to known_hosts..."
+    if ! sudo -u dvd-distribute ssh-keyscan -H "$peer_host" >> "$known_hosts" 2>/dev/null; then
+        print_error "Could not scan host key from $peer_host"
+        return 1
+    fi
+    # Remove duplicates
+    sort -u "$known_hosts" -o "$known_hosts"
+    chown dvd-distribute:dvd-ripper "$known_hosts"
+    print_info "✓ Added host key for $peer_host"
+
+    # Add local public key to peer's dvd-transfer authorized_keys
+    print_info "Adding local public key to $peer_host dvd-transfer user..."
+    # shellcheck disable=SC2029
+    if ssh "$peer_user@$peer_host" "echo '$local_pubkey' | sudo tee -a /var/lib/dvd-transfer/.ssh/authorized_keys > /dev/null && sudo chown dvd-transfer:dvd-ripper /var/lib/dvd-transfer/.ssh/authorized_keys && sudo chmod 600 /var/lib/dvd-transfer/.ssh/authorized_keys"; then
+        print_info "✓ Public key added to $peer_host"
+    else
+        print_error "Failed to add public key to $peer_host"
+        print_warn "Manually add this key to $peer_host:/var/lib/dvd-transfer/.ssh/authorized_keys"
+        print_warn "$local_pubkey"
+        return 1
+    fi
+
+    # Test connection
+    print_info "Testing connection..."
+    if sudo -u dvd-distribute ssh -o BatchMode=yes -o ConnectTimeout=10 "dvd-transfer@$peer_host" "echo 'SSH connection successful'"; then
+        print_info "✓ Cluster peer $peer_host configured successfully"
+    else
+        print_error "SSH connection test failed"
+        print_warn "Check that dvd-transfer user on $peer_host has /bin/bash shell"
+        return 1
     fi
 }
 
@@ -1173,6 +1253,15 @@ main() {
     # Print next steps
     print_next_steps
 }
+
+# Handle cluster peer setup (standalone operation)
+if [[ -n "$SETUP_CLUSTER_PEER" ]]; then
+    print_info "DVD Ripper Cluster Peer Setup"
+    print_info "=============================="
+    print_info ""
+    setup_cluster_peer "$SETUP_CLUSTER_PEER"
+    exit $?
+fi
 
 # Run main function
 main "$@"
