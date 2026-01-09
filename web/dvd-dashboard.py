@@ -214,7 +214,7 @@ def get_active_progress():
 
     # Parse HandBrake encoding progress
     # Pattern: "Encoding: task X of Y, XX.XX % (XX.XX fps, avg XX.XX fps, ETA XXhXXmXXs)"
-    if locks.get("encoder", {}).get("active") and not is_distributing:
+    if locks.get("encoder", {}).get("active"):
         # Find all encoding lines and get the most recent one
         encoder_matches = re.findall(
             r'Encoding:.*?(\d+\.?\d*)\s*%.*?(\d+\.?\d*)\s*fps.*?ETA\s*(\d+h\d+m\d+s|\d+m\d+s)',

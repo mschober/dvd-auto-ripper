@@ -816,6 +816,88 @@ install_polkit_rules() {
     fi
 }
 
+setup_local_transfer_permissions() {
+    # Configure permissions for local transfer mode (when this machine IS the media server)
+    # This adds dvd-transfer to the group that owns LOCAL_LIBRARY_PATH
+    print_info "Checking local transfer mode permissions..."
+
+    local config_file="/etc/dvd-ripper.conf"
+
+    # Check if config exists
+    if [[ ! -f "$config_file" ]]; then
+        print_info "  Config not yet installed, skipping (will check on next run)"
+        return 0
+    fi
+
+    # Source the config to get TRANSFER_MODE and LOCAL_LIBRARY_PATH
+    local transfer_mode=""
+    local local_path=""
+    transfer_mode=$(grep -E "^TRANSFER_MODE=" "$config_file" 2>/dev/null | cut -d'"' -f2 || true)
+    local_path=$(grep -E "^LOCAL_LIBRARY_PATH=" "$config_file" 2>/dev/null | cut -d'"' -f2 || true)
+
+    # Only proceed if local transfer mode is configured
+    if [[ "$transfer_mode" != "local" ]]; then
+        print_info "  Transfer mode is 'remote', no local permissions needed"
+        return 0
+    fi
+
+    if [[ -z "$local_path" ]]; then
+        print_warn "  TRANSFER_MODE=local but LOCAL_LIBRARY_PATH is empty"
+        print_warn "  Set LOCAL_LIBRARY_PATH in $config_file and re-run installer"
+        return 0
+    fi
+
+    if [[ ! -d "$local_path" ]]; then
+        print_warn "  LOCAL_LIBRARY_PATH does not exist: $local_path"
+        print_warn "  Create the directory and re-run installer, or fix after setup"
+        return 0
+    fi
+
+    # Get the group that owns the directory
+    local dir_group
+    dir_group=$(stat -c '%G' "$local_path" 2>/dev/null)
+
+    if [[ -z "$dir_group" ]]; then
+        print_error "  Could not determine group ownership of $local_path"
+        return 1
+    fi
+
+    print_info "  Local library path: $local_path (group: $dir_group)"
+
+    # Add dvd-transfer to the owning group
+    if id -nG dvd-transfer 2>/dev/null | grep -qw "$dir_group"; then
+        print_info "  ✓ dvd-transfer already in group: $dir_group"
+    else
+        if usermod -aG "$dir_group" dvd-transfer 2>/dev/null; then
+            print_info "  ✓ Added dvd-transfer to group: $dir_group"
+        else
+            print_error "  Failed to add dvd-transfer to group: $dir_group"
+            print_warn "  Run manually: sudo usermod -aG $dir_group dvd-transfer"
+            return 1
+        fi
+    fi
+
+    # Ensure directory is group-writable
+    local dir_perms
+    dir_perms=$(stat -c '%a' "$local_path" 2>/dev/null)
+
+    # Check if group write bit is set (second digit >= 6 or 7, or second digit is 2 or 3)
+    local group_digit="${dir_perms:1:1}"
+    if [[ "$group_digit" =~ [2367] ]]; then
+        print_info "  ✓ Directory is group-writable (mode $dir_perms)"
+    else
+        if chmod g+w "$local_path" 2>/dev/null; then
+            print_info "  ✓ Made directory group-writable: $local_path"
+        else
+            print_error "  Failed to make directory group-writable"
+            print_warn "  Run manually: sudo chmod g+w $local_path"
+            return 1
+        fi
+    fi
+
+    print_info "✓ Local transfer permissions configured"
+}
+
 install_lm_sensors() {
     # Install lm-sensors for system health monitoring (optional)
     print_info "Checking lm-sensors for temperature/fan monitoring..."
@@ -1078,6 +1160,9 @@ main() {
 
     # Install polkit rules for dashboard service control
     install_polkit_rules
+
+    # Setup permissions for local transfer mode (if configured)
+    setup_local_transfer_permissions
 
     # Install lm-sensors for health monitoring (optional)
     install_lm_sensors
