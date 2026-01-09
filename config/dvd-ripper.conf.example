@@ -161,6 +161,12 @@ ISO_LOCK_FILE="/run/dvd-ripper/iso.lock"
 ENCODER_LOCK_FILE="/run/dvd-ripper/encoder.lock"
 TRANSFER_LOCK_FILE="/run/dvd-ripper/transfer.lock"
 
+# Event-driven triggers (pipeline mode)
+# When enabled, each stage automatically triggers the next stage via systemctl
+# instead of waiting for the next timer interval. Reduces latency between stages.
+# Default: 0 (disabled - use polling timers)
+TRIGGER_NEXT_STAGE="0"
+
 # Cleanup settings (pipeline mode)
 # Delete local MKV after successful NAS transfer
 CLEANUP_MKV_AFTER_TRANSFER="1"

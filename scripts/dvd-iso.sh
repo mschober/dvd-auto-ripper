@@ -75,6 +75,9 @@ create_dvd_iso() {
 
         log_info "[ISO] ISO ready for encoding: $state_file_ready"
 
+        # Trigger encoder if event-driven triggers enabled
+        trigger_next_stage "iso-ready"
+
         # Package CSS keys for cluster distribution (must be before eject)
         local volume_label=$(blkid -o value -s LABEL "$device" 2>/dev/null)
         if [[ -n "$volume_label" ]] && package_dvdcss_keys "$iso_path" "$volume_label"; then

@@ -1014,6 +1014,39 @@ parse_json_field() {
     echo "$metadata" | grep -oP "\"$field\":\s*\"?\K[^\",$}]+" 2>/dev/null | head -1 || true
 }
 
+# Trigger next pipeline stage if event-driven triggers are enabled
+# Usage: trigger_next_stage CURRENT_STATE
+# Returns: 0 on success or if disabled, 1 on failure
+trigger_next_stage() {
+    local current_state="$1"
+
+    if [[ "${TRIGGER_NEXT_STAGE:-0}" != "1" ]]; then
+        return 0
+    fi
+
+    local target_service=""
+    case "$current_state" in
+        iso-ready)
+            target_service="dvd-encoder.service"
+            ;;
+        encoded-ready)
+            target_service="dvd-transfer.service"
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+
+    log_info "[TRIGGER] Starting $target_service"
+    if systemctl start "$target_service" 2>/dev/null; then
+        log_info "[TRIGGER] $target_service started"
+        return 0
+    else
+        log_warn "[TRIGGER] Failed to start $target_service (may already be running)"
+        return 0  # Non-fatal - timer will pick it up
+    fi
+}
+
 # ============================================================================
 # Cluster Mode: Distributed Encoding Support
 # ============================================================================

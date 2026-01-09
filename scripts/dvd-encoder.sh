@@ -478,6 +478,9 @@ main() {
         local remaining=$(count_pending_state "iso-ready")
         local pending_transfer=$(count_pending_state "encoded-ready")
         log_info "[ENCODER] ISOs remaining: $remaining, Videos pending transfer: $pending_transfer"
+
+        # Trigger transfer if event-driven triggers enabled
+        trigger_next_stage "encoded-ready"
     else
         log_error "[ENCODER] Encoding failed"
     fi
