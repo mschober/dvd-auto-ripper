@@ -145,6 +145,43 @@ install_libdvdcss() {
     fi
 }
 
+# Check if libdvdcss is installed using multiple detection methods
+# Returns 0 if found, 1 if not found
+check_libdvdcss() {
+    # Method 1: Check ldconfig cache
+    if ldconfig -p 2>/dev/null | grep -q libdvdcss; then
+        return 0
+    fi
+
+    # Method 2: Check common library paths directly
+    local lib_paths=(
+        /usr/lib/x86_64-linux-gnu/libdvdcss.so*
+        /usr/lib/libdvdcss.so*
+        /lib/x86_64-linux-gnu/libdvdcss.so*
+        /lib/libdvdcss.so*
+        /usr/local/lib/libdvdcss.so*
+    )
+    for pattern in "${lib_paths[@]}"; do
+        # shellcheck disable=SC2086
+        if ls $pattern &>/dev/null; then
+            return 0
+        fi
+    done
+
+    # Method 3: Check package manager
+    if command -v dpkg &>/dev/null; then
+        if dpkg -l libdvdcss2 2>/dev/null | grep -q '^ii'; then
+            return 0
+        fi
+    elif command -v rpm &>/dev/null; then
+        if rpm -q libdvdcss &>/dev/null; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
 check_dependencies() {
     local missing_deps=()
 
@@ -173,7 +210,7 @@ check_dependencies() {
     fi
 
     # Check for libdvdcss (needed for encrypted DVDs)
-    if ! ldconfig -p | grep -q libdvdcss; then
+    if ! check_libdvdcss; then
         if [[ "$INSTALL_LIBDVDCSS" == "true" ]]; then
             install_libdvdcss || print_warn "libdvdcss installation failed - continuing anyway"
             # Refresh library cache
@@ -1120,7 +1157,7 @@ test_installation() {
     fi
 
     # Check libdvdcss
-    if ldconfig -p | grep -q libdvdcss; then
+    if check_libdvdcss; then
         print_info "✓ libdvdcss installed (encrypted DVD support)"
     else
         print_warn "⚠ libdvdcss not installed (encrypted DVDs won't work)"
