@@ -4972,14 +4972,9 @@ def api_accept_job():
     if not config["cluster_enabled"]:
         return jsonify({"error": "Cluster mode is not enabled"}), 400
 
-    # Check if we have capacity
-    capacity = get_worker_capacity()
-    if not capacity["available"]:
-        return jsonify({
-            "error": "No capacity available",
-            "load": capacity["load_1m"],
-            "slots_free": capacity["slots_free"]
-        }), 503
+    # Note: No capacity check here. Capacity is checked BEFORE rsync transfer
+    # in find_available_peer(). Once ISO is transferred, we always accept the
+    # job so it gets queued for encoding.
 
     try:
         data = request.json
@@ -5024,11 +5019,14 @@ def api_accept_job():
         with open(state_file, 'w') as f:
             json.dump(metadata, f, indent=2)
 
+        # Calculate queue position (number of iso-ready files including this one)
+        queue_depth = len(glob.glob(os.path.join(STAGING_DIR, "*.iso-ready")))
+
         return jsonify({
             "status": "accepted",
             "state_file": os.path.basename(state_file),
             "node_name": config["node_name"],
-            "queue_position": capacity["queue_depth"] + 1
+            "queue_position": queue_depth
         })
 
     except Exception as e:
