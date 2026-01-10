@@ -1037,6 +1037,8 @@ claim_state_file() {
 
     # Try atomic rename - if it fails, another worker got it
     if mv "$state_file" "$new_file" 2>/dev/null; then
+        # Ensure file is group-writable for next pipeline stage
+        chmod g+w "$new_file" 2>/dev/null || true
         log_info "Claimed: $basename -> ${name_part}.${new_state}"
         echo "$new_file"
         return 0
@@ -1062,6 +1064,8 @@ create_pipeline_state() {
     local state_file="${STAGING_DIR}/${title}-${timestamp}.${state}"
 
     echo "$metadata" > "$state_file"
+    # Make group-writable so other pipeline stages can update the file
+    chmod g+w "$state_file" 2>/dev/null || true
     log_debug "Created pipeline state file: $state_file"
     echo "$state_file"
 }
