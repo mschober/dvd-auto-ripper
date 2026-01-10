@@ -14,15 +14,19 @@ import socket
 import subprocess
 from datetime import datetime
 from flask import Flask, jsonify, render_template_string, request, redirect, url_for, send_file
+from helpers.pipeline import (
+    get_queue_items, count_by_state,
+    STAGING_DIR, STATE_ORDER, QUEUE_ITEMS_PER_PAGE
+)
 
 app = Flask(__name__)
 
 # Configuration - can be overridden via environment variables
-STAGING_DIR = os.environ.get("STAGING_DIR", "/var/tmp/dvd-rips")
+# Note: STAGING_DIR and STATE_ORDER are imported from helpers.pipeline
 LOG_FILE = os.environ.get("LOG_FILE", "/var/log/dvd-ripper.log")
 CONFIG_FILE = os.environ.get("CONFIG_FILE", "/etc/dvd-ripper.conf")
 PIPELINE_VERSION_FILE = os.environ.get("PIPELINE_VERSION_FILE", "/usr/local/bin/VERSION")
-DASHBOARD_VERSION = "1.6.1"
+DASHBOARD_VERSION = "1.7.0"
 GITHUB_URL = "https://github.com/mschober/dvd-auto-ripper"
 
 LOCK_FILES = {
@@ -41,7 +45,6 @@ STATE_CONFIG = {
     "encoded-ready": {"lock": None, "revert_to": None},
     "transferring": {"lock": "transfer", "revert_to": "encoded-ready"},
 }
-STATE_ORDER = ["iso-creating", "iso-ready", "distributing", "encoding", "encoded-ready", "transferring", "transferred"]
 
 # Generic title detection patterns (items needing identification)
 GENERIC_PATTERNS = [
@@ -72,35 +75,7 @@ def get_pipeline_version():
         return "unknown"
 
 
-def get_queue_items():
-    """Read all state files and return sorted list of queue items."""
-    items = []
-    for state in STATE_ORDER:
-        pattern = os.path.join(STAGING_DIR, f"*.{state}")
-        for state_file in glob.glob(pattern):
-            try:
-                with open(state_file, 'r') as f:
-                    metadata = json.load(f)
-            except (json.JSONDecodeError, IOError):
-                metadata = {}
-
-            items.append({
-                "state": state,
-                "file": os.path.basename(state_file),
-                "metadata": metadata,
-                "mtime": os.path.getmtime(state_file)
-            })
-
-    return sorted(items, key=lambda x: x["mtime"])
-
-
-def count_by_state():
-    """Return dict of counts by state."""
-    counts = {}
-    for state in STATE_ORDER:
-        pattern = os.path.join(STAGING_DIR, f"*.{state}")
-        counts[state] = len(glob.glob(pattern))
-    return counts
+# Note: get_queue_items() and count_by_state() moved to helpers/pipeline.py
 
 
 def get_disk_usage():
@@ -1621,6 +1596,14 @@ DASHBOARD_HTML = """
         .btn-modal-cancel:hover { background: #d1d5db; }
         .btn-modal-confirm { background: #ef4444; color: white; }
         .btn-modal-confirm:hover { background: #dc2626; }
+        /* Pagination */
+        .pagination { display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+        .pagination a, .pagination span { padding: 6px 12px; border-radius: 4px; text-decoration: none; font-size: 14px; }
+        .pagination a { background: #374151; color: #e5e7eb; }
+        .pagination a:hover { background: #4b5563; }
+        .pagination span.current { background: #3b82f6; color: white; }
+        .pagination span.disabled { background: #1f2937; color: #6b7280; cursor: not-allowed; }
+        .pagination span.ellipsis { background: none; color: #6b7280; }
         pre {
             background: #1e1e1e; color: #d4d4d4; padding: 12px;
             overflow-x: auto; border-radius: 4px; font-size: 11px;
@@ -1783,7 +1766,7 @@ DASHBOARD_HTML = """
     </div>
 
     <div class="card" style="margin-top: 16px;">
-        <h2>Queue ({{ queue|length }} items)</h2>
+        <h2>Queue ({{ queue_total }} items)</h2>
         {% if queue %}
         <table>
             <tr><th>Title</th><th>Year</th><th>State</th><th>Created</th><th style="width: 120px;">Actions</th></tr>
@@ -1811,6 +1794,31 @@ DASHBOARD_HTML = """
             </tr>
             {% endfor %}
         </table>
+        {% if queue_total_pages > 1 %}
+        <div class="pagination">
+            {% if queue_page > 1 %}
+            <a href="?page={{ queue_page - 1 }}">&laquo; Prev</a>
+            {% else %}
+            <span class="disabled">&laquo; Prev</span>
+            {% endif %}
+            {% for p in range(1, queue_total_pages + 1) %}
+                {% if p == queue_page %}
+                <span class="current">{{ p }}</span>
+                {% elif p == 1 or p == queue_total_pages or (p >= queue_page - 1 and p <= queue_page + 1) %}
+                <a href="?page={{ p }}">{{ p }}</a>
+                {% elif p == 2 and queue_page > 3 %}
+                <span class="ellipsis">...</span>
+                {% elif p == queue_total_pages - 1 and queue_page < queue_total_pages - 2 %}
+                <span class="ellipsis">...</span>
+                {% endif %}
+            {% endfor %}
+            {% if queue_page < queue_total_pages %}
+            <a href="?page={{ queue_page + 1 }}">Next &raquo;</a>
+            {% else %}
+            <span class="disabled">Next &raquo;</span>
+            {% endif %}
+        </div>
+        {% endif %}
         {% else %}
         <p class="queue-empty">No items in queue. Insert a DVD to start ripping.</p>
         {% endif %}
@@ -4222,12 +4230,17 @@ def dashboard():
     """Main dashboard page."""
     message = request.args.get("message")
     message_type = request.args.get("type", "success")
+    page = request.args.get("page", 1, type=int)
 
     cluster_config = get_cluster_config()
+    queue_data = get_queue_items(page=page)
     return render_template_string(
         DASHBOARD_HTML,
         counts=count_by_state(),
-        queue=get_queue_items(),
+        queue=queue_data["items"],
+        queue_total=queue_data["total"],
+        queue_page=queue_data["page"],
+        queue_total_pages=queue_data["total_pages"],
         disk=get_disk_usage(),
         locks=get_lock_status(),
         progress=get_active_progress(),
@@ -4438,8 +4451,13 @@ def api_status():
 
 @app.route("/api/queue")
 def api_queue():
-    """API: Get queue items."""
-    return jsonify(get_queue_items())
+    """API: Get queue items with optional pagination."""
+    page = request.args.get("page", type=int)
+    per_page = request.args.get("per_page", type=int)
+
+    if page is not None:
+        return jsonify(get_queue_items(page=page, per_page=per_page))
+    return jsonify(get_queue_items())  # All items for backward compat
 
 
 @app.route("/api/logs")

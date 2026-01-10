@@ -73,6 +73,16 @@ print_info "Installing dvd-dashboard.py to $INSTALL_BIN..."
 cp "$DASHBOARD_SOURCE" "$INSTALL_BIN/dvd-dashboard.py"
 chmod 755 "$INSTALL_BIN/dvd-dashboard.py"
 
+# Install helpers package if it exists
+HELPERS_SOURCE="$SOURCE_DIR/web/helpers"
+if [[ -d "$HELPERS_SOURCE" ]]; then
+    print_info "Installing helpers package..."
+    mkdir -p "$INSTALL_BIN/helpers"
+    cp -r "$HELPERS_SOURCE"/* "$INSTALL_BIN/helpers/"
+    chmod 755 "$INSTALL_BIN/helpers"
+    chmod 644 "$INSTALL_BIN/helpers"/*.py
+fi
+
 # Install systemd service if source exists
 if [[ -f "$SERVICE_SOURCE" ]]; then
     print_info "Installing systemd service..."
