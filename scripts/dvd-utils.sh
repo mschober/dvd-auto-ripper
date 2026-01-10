@@ -27,6 +27,10 @@ LOG_FILE_DISTRIBUTE="${LOG_DIR}/distribute.log"
 # Valid values: iso, encoder, transfer, distribute
 CURRENT_STAGE=""
 
+# Current device (set by iso script for per-drive logging)
+# E.g., "sr0", "sr1" - used for per-device ISO log files
+CURRENT_DEVICE=""
+
 # Log levels
 declare -A LOG_LEVELS=([DEBUG]=0 [INFO]=1 [WARN]=2 [ERROR]=3)
 CURRENT_LOG_LEVEL=${LOG_LEVELS[$LOG_LEVEL]:-1}
@@ -45,6 +49,17 @@ get_stage_log_file() {
         distribute) echo "$LOG_FILE_DISTRIBUTE" ;;
         *)          echo "$LOG_FILE_ISO" ;;  # Default to iso.log
     esac
+}
+
+# Get per-device log file path for ISO operations
+# Used for ddrescue output to enable per-drive progress tracking
+# Returns: path to device-specific log file (e.g., iso-sr0.log)
+get_device_log_file() {
+    if [[ -n "$CURRENT_DEVICE" && "$CURRENT_STAGE" == "iso" ]]; then
+        echo "${LOG_DIR}/iso-${CURRENT_DEVICE}.log"
+    else
+        get_stage_log_file
+    fi
 }
 
 # Log message with timestamp and level
@@ -256,7 +271,7 @@ create_iso() {
     # Run ddrescue with error recovery
     # -n = no scraping (faster initial pass)
     # -b 2048 = DVD sector size
-    if ddrescue -n -b 2048 "$device" "$output_iso" "$mapfile" >> "$(get_stage_log_file)" 2>&1; then
+    if ddrescue -n -b 2048 "$device" "$output_iso" "$mapfile" >> "$(get_device_log_file)" 2>&1; then
         log_info "ISO creation completed successfully"
 
         # Verify ISO file exists and has reasonable size
