@@ -292,7 +292,8 @@ get_dvd_info() {
     scan_output=$(HandBrakeCLI --scan -t 0 -i "$device" 2>&1)
 
     # Check if we got valid output instead of relying on exit code
-    if [[ -z "$scan_output" ]] || ! echo "$scan_output" | grep -q "scan:"; then
+    # Note: Using 'grep > /dev/null' instead of 'grep -q' to avoid broken pipe with pipefail
+    if [[ -z "$scan_output" ]] || ! echo "$scan_output" | grep "scan:" > /dev/null; then
         log_error "HandBrake scan failed - no valid output"
         return 1
     fi
@@ -411,7 +412,8 @@ check_duplicate() {
     fi
 
     # Check local staging directory
-    if ls "$STAGING_DIR"/$pattern 2>/dev/null | grep -q .; then
+    # Note: Using 'grep > /dev/null' instead of 'grep -q' to avoid broken pipe with pipefail
+    if ls "$STAGING_DIR"/$pattern 2>/dev/null | grep . > /dev/null; then
         log_warn "Duplicate found in staging directory: $pattern"
         return 0
     fi
@@ -419,7 +421,7 @@ check_duplicate() {
     # Check NAS if configured
     if [[ -n "$NAS_HOST" ]] && [[ -n "$NAS_USER" ]] && [[ -n "$NAS_PATH" ]]; then
         log_debug "Checking for duplicates on NAS"
-        if ssh "${NAS_USER}@${NAS_HOST}" "ls ${NAS_PATH}/${pattern}" 2>/dev/null | grep -q .; then
+        if ssh "${NAS_USER}@${NAS_HOST}" "ls ${NAS_PATH}/${pattern}" 2>/dev/null | grep . > /dev/null; then
             log_warn "Duplicate found on NAS: $pattern"
             return 0
         fi
@@ -1291,7 +1293,8 @@ distribute_to_peer() {
         -d "{\"metadata\": $new_metadata, \"origin\": \"$CLUSTER_NODE_NAME\"}" \
         2>/dev/null)
 
-    if [[ $? -ne 0 ]] || ! echo "$api_response" | grep -q '"status":\s*"accepted"'; then
+    # Note: Using 'grep > /dev/null' instead of 'grep -q' to avoid broken pipe with pipefail
+    if [[ $? -ne 0 ]] || ! echo "$api_response" | grep '"status":\s*"accepted"' > /dev/null; then
         log_error "[CLUSTER] Peer $peer_name did not accept job"
         # Revert state
         remove_state_file "$dist_state"

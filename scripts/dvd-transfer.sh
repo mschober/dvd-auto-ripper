@@ -117,7 +117,8 @@ return_remote_job() {
         -d "{\"title\": \"$title\", \"timestamp\": \"$timestamp\", \"mkv_path\": \"$remote_mkv_path\", \"success\": true}" \
         2>/dev/null)
 
-    if [[ $? -ne 0 ]] || ! echo "$api_response" | grep -q '"status":\s*"ok"'; then
+    # Note: Using 'grep > /dev/null' instead of 'grep -q' to avoid broken pipe with pipefail
+    if [[ $? -ne 0 ]] || ! echo "$api_response" | grep '"status":\s*"ok"' > /dev/null; then
         log_warn "[TRANSFER] Could not notify origin (MKV was transferred though)"
     else
         log_info "[TRANSFER] Origin notified of completion"
