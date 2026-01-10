@@ -23,10 +23,16 @@ app = Flask(__name__)
 
 # Configuration - can be overridden via environment variables
 # Note: STAGING_DIR and STATE_ORDER are imported from helpers.pipeline
-LOG_FILE = os.environ.get("LOG_FILE", "/var/log/dvd-ripper.log")
+LOG_DIR = os.environ.get("LOG_DIR", "/var/log/dvd-ripper")
+LOG_FILES = {
+    "iso": f"{LOG_DIR}/iso.log",
+    "encoder": f"{LOG_DIR}/encoder.log",
+    "transfer": f"{LOG_DIR}/transfer.log",
+    "distribute": f"{LOG_DIR}/distribute.log",
+}
 CONFIG_FILE = os.environ.get("CONFIG_FILE", "/etc/dvd-ripper.conf")
 PIPELINE_VERSION_FILE = os.environ.get("PIPELINE_VERSION_FILE", "/usr/local/bin/VERSION")
-DASHBOARD_VERSION = "1.7.0"
+DASHBOARD_VERSION = "1.8.0"
 GITHUB_URL = "https://github.com/mschober/dvd-auto-ripper"
 
 LOCK_DIR = "/run/dvd-ripper"
@@ -103,34 +109,34 @@ def get_disk_usage():
             "available": "N/A", "percent": "0", "percent_num": 0}
 
 
-def get_recent_logs(lines=50):
-    """Read last N lines from log file.
+def get_stage_logs(stage, lines=100):
+    """Read last N lines from a stage-specific log file.
 
     Also checks rotated log files in case a process is still writing
     to the old (rotated) file handle after logrotate runs.
-    Uses whichever log file has the most recent modification time.
     """
+    log_file = LOG_FILES.get(stage)
+    if not log_file:
+        return f"(unknown stage: {stage})"
+
     try:
-        log_file = LOG_FILE
+        if not os.path.exists(log_file):
+            return "(no logs yet)"
 
         # Get main log mtime
         try:
-            main_mtime = os.path.getmtime(LOG_FILE) if os.path.exists(LOG_FILE) else 0
+            main_mtime = os.path.getmtime(log_file)
         except OSError:
             main_mtime = 0
 
         # Check for rotated log files that may be more recently modified
-        # This happens when encoder is still writing to old file handle
-        log_dir = os.path.dirname(LOG_FILE)
-        log_base = os.path.basename(LOG_FILE)
-
+        log_base = os.path.basename(log_file)
         try:
-            for f in os.listdir(log_dir):
+            for f in os.listdir(LOG_DIR):
                 if f.startswith(log_base) and f != log_base and not f.endswith('.gz'):
-                    full_path = os.path.join(log_dir, f)
+                    full_path = os.path.join(LOG_DIR, f)
                     try:
                         mtime = os.path.getmtime(full_path)
-                        # Use rotated log if it's more recently modified
                         if mtime > main_mtime:
                             log_file = full_path
                             main_mtime = mtime
@@ -146,6 +152,36 @@ def get_recent_logs(lines=50):
         return result.stdout or "(no logs)"
     except Exception:
         return "(unable to read log file)"
+
+
+def get_all_logs(lines=50):
+    """Read last N lines from all stage log files combined.
+
+    Returns logs from all stages merged and sorted by timestamp.
+    """
+    all_lines = []
+    for stage, log_file in LOG_FILES.items():
+        try:
+            if os.path.exists(log_file):
+                result = subprocess.run(
+                    ["tail", "-n", str(lines), log_file],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.stdout:
+                    all_lines.extend(result.stdout.strip().split('\n'))
+        except Exception:
+            pass
+
+    # Sort by timestamp (logs start with [YYYY-MM-DD HH:MM:SS])
+    all_lines.sort()
+    # Return last N lines
+    return '\n'.join(all_lines[-lines:]) if all_lines else "(no logs)"
+
+
+# Legacy alias for backwards compatibility
+def get_recent_logs(lines=50):
+    """Legacy function - returns combined logs from all stages."""
+    return get_all_logs(lines)
 
 
 def check_lock_file(lock_file):
@@ -1914,11 +1950,6 @@ DASHBOARD_HTML = """
         {% endif %}
     </div>
 
-    <div class="card" style="margin-top: 16px;">
-        <h2>Recent Logs <a href="/logs" style="font-size: 12px; font-weight: normal;">(view all)</a></h2>
-        <pre>{{ logs }}</pre>
-    </div>
-
     <div class="footer">
         <p>
             Pipeline v{{ pipeline_version }} | Dashboard v{{ dashboard_version }} |
@@ -2298,6 +2329,76 @@ LOGS_HTML = """
     <title>DVD Ripper Logs</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0; padding: 20px; background: #f5f5f5;
+        }
+        h1 { color: #333; margin: 0 0 20px 0; }
+        h2 { color: #333; margin: 0 0 12px 0; font-size: 18px; }
+        a { color: #3b82f6; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            gap: 20px;
+        }
+        .card {
+            background: white; border-radius: 8px; padding: 16px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .card-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 12px;
+        }
+        pre {
+            background: #1e1e1e; color: #d4d4d4; padding: 12px;
+            border-radius: 4px; overflow-x: auto; font-size: 11px;
+            line-height: 1.4; max-height: 300px; overflow-y: auto;
+            margin: 0;
+        }
+        .btn {
+            padding: 6px 12px; border: none; border-radius: 4px;
+            cursor: pointer; background: #3b82f6; color: white;
+            font-size: 13px; text-decoration: none; display: inline-block;
+        }
+        .btn:hover { background: #2563eb; text-decoration: none; }
+        .btn-sm { padding: 4px 8px; font-size: 12px; }
+        .stage-iso { border-left: 4px solid #ef4444; }
+        .stage-encoder { border-left: 4px solid #f59e0b; }
+        .stage-transfer { border-left: 4px solid #10b981; }
+        .stage-distribute { border-left: 4px solid #8b5cf6; }
+        .footer { margin-top: 20px; font-size: 12px; color: #666; text-align: center; }
+    </style>
+</head>
+<body>
+    <h1><a href="/">Dashboard</a> / Logs</h1>
+    <div class="grid">
+        {% for stage, log_content in logs.items() %}
+        <div class="card stage-{{ stage }}">
+            <div class="card-header">
+                <h2>{{ stage|title }}</h2>
+                <a href="/log/{{ stage }}" class="btn btn-sm">Full Log</a>
+            </div>
+            <pre>{{ log_content }}</pre>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="footer">
+        Pipeline v{{ pipeline_version }} | Dashboard v{{ dashboard_version }} |
+        <a href="{{ github_url }}" target="_blank">dvd-auto-ripper</a>
+    </div>
+</body>
+</html>
+"""
+
+STAGE_LOG_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ stage|title }} Log - DVD Ripper</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
         body {
             font-family: monospace; margin: 0; padding: 20px;
             background: #1e1e1e; color: #d4d4d4;
@@ -2309,23 +2410,36 @@ LOGS_HTML = """
             background: #2d2d2d; padding: 16px; border-radius: 4px;
             overflow-x: auto; font-size: 12px; line-height: 1.5;
         }
-        .controls { margin-bottom: 16px; }
+        .controls { margin-bottom: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
         .btn {
             padding: 8px 16px; border: none; border-radius: 4px;
             cursor: pointer; background: #3b82f6; color: white;
-            font-size: 14px; margin-right: 8px; text-decoration: none;
-            display: inline-block;
+            font-size: 14px; text-decoration: none; display: inline-block;
         }
-        .btn:hover { background: #2563eb; }
+        .btn:hover { background: #2563eb; text-decoration: none; }
+        .btn-secondary { background: #4b5563; }
+        .btn-secondary:hover { background: #374151; }
+        .stage-indicator {
+            display: inline-block; width: 12px; height: 12px;
+            border-radius: 2px; margin-right: 8px;
+        }
+        .stage-iso { background: #ef4444; }
+        .stage-encoder { background: #f59e0b; }
+        .stage-transfer { background: #10b981; }
+        .stage-distribute { background: #8b5cf6; }
         .footer { margin-top: 16px; font-size: 12px; color: #666; }
     </style>
 </head>
 <body>
-    <h1><a href="/">Dashboard</a> / Logs</h1>
+    <h1>
+        <a href="/">Dashboard</a> / <a href="/logs">Logs</a> /
+        <span class="stage-indicator stage-{{ stage }}"></span>{{ stage|title }}
+    </h1>
     <div class="controls">
-        <a href="?lines=100" class="btn">Last 100</a>
-        <a href="?lines=500" class="btn">Last 500</a>
-        <a href="?lines=1000" class="btn">Last 1000</a>
+        <a href="/log/{{ stage }}?lines=100" class="btn">Last 100</a>
+        <a href="/log/{{ stage }}?lines=500" class="btn">Last 500</a>
+        <a href="/log/{{ stage }}?lines=1000" class="btn">Last 1000</a>
+        <a href="/logs" class="btn btn-secondary">All Logs</a>
     </div>
     <pre>{{ logs }}</pre>
     <div class="footer">
@@ -4334,7 +4448,6 @@ def dashboard():
         disk=get_disk_usage(),
         locks=get_lock_status(),
         progress=get_active_progress(),
-        logs=get_recent_logs(30),
         now=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         message=message,
         message_type=message_type,
@@ -4348,11 +4461,28 @@ def dashboard():
 
 @app.route("/logs")
 def logs_page():
-    """Full logs page."""
-    lines = request.args.get("lines", 200, type=int)
+    """Per-stage logs overview page."""
+    lines = request.args.get("lines", 50, type=int)
+    logs = {stage: get_stage_logs(stage, lines) for stage in LOG_FILES.keys()}
     return render_template_string(
         LOGS_HTML,
-        logs=get_recent_logs(lines),
+        logs=logs,
+        pipeline_version=get_pipeline_version(),
+        dashboard_version=DASHBOARD_VERSION,
+        github_url=GITHUB_URL
+    )
+
+
+@app.route("/log/<stage>")
+def stage_log_page(stage):
+    """Individual stage log page."""
+    if stage not in LOG_FILES:
+        return f"Unknown stage: {stage}", 404
+    lines = request.args.get("lines", 200, type=int)
+    return render_template_string(
+        STAGE_LOG_HTML,
+        stage=stage,
+        logs=get_stage_logs(stage, lines),
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
         github_url=GITHUB_URL
@@ -4552,9 +4682,18 @@ def api_queue():
 
 @app.route("/api/logs")
 def api_logs():
-    """API: Get recent logs."""
+    """API: Get recent logs (combined from all stages)."""
     lines = request.args.get("lines", 100, type=int)
-    return jsonify({"logs": get_recent_logs(lines)})
+    return jsonify({"logs": get_all_logs(lines)})
+
+
+@app.route("/api/logs/<stage>")
+def api_stage_logs(stage):
+    """API: Get logs for a specific stage."""
+    if stage not in LOG_FILES:
+        return jsonify({"error": f"Unknown stage: {stage}"}), 404
+    lines = request.args.get("lines", 100, type=int)
+    return jsonify({"stage": stage, "logs": get_stage_logs(stage, lines)})
 
 
 @app.route("/api/disk")

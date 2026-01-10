@@ -702,14 +702,25 @@ create_directories() {
     chown root:dvd-ripper "$staging_dir"
     print_info "✓ Staging directory: $staging_dir (mode 2770, group dvd-ripper)"
 
-    # Create log file with group write access
-    local log_file="/var/log/dvd-ripper.log"
-    if [[ ! -f "$log_file" ]]; then
-        touch "$log_file"
+    # Create log directory and per-stage log files
+    local log_dir="/var/log/dvd-ripper"
+    if [[ ! -d "$log_dir" ]]; then
+        mkdir -p "$log_dir"
     fi
-    chmod 660 "$log_file"
-    chown root:dvd-ripper "$log_file"
-    print_info "✓ Log file: $log_file (mode 660, group dvd-ripper)"
+    chmod 770 "$log_dir"
+    chown root:dvd-ripper "$log_dir"
+
+    # Create per-stage log files
+    for log_name in iso encoder transfer distribute; do
+        local log_file="${log_dir}/${log_name}.log"
+        if [[ ! -f "$log_file" ]]; then
+            touch "$log_file"
+        fi
+        chmod 660 "$log_file"
+        chown root:dvd-ripper "$log_file"
+    done
+    print_info "✓ Log directory: $log_dir (mode 770, group dvd-ripper)"
+    print_info "  Log files: iso.log, encoder.log, transfer.log, distribute.log"
 
     # Create runtime directory for lock files
     local run_dir="/run/dvd-ripper"

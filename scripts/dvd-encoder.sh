@@ -11,6 +11,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source utility functions
 source "${SCRIPT_DIR}/dvd-utils.sh"
 
+# Set logging stage for per-stage log routing
+CURRENT_STAGE="encoder"
+
 # Configuration (overridden by config file)
 HANDBRAKE_PRESET="${HANDBRAKE_PRESET:-Fast 1080p30}"
 HANDBRAKE_QUALITY="${HANDBRAKE_QUALITY:-20}"
@@ -116,7 +119,7 @@ generate_preview() {
         -c:v libx264 -preset veryfast -crf 28 \
         -c:a aac -b:a 64k \
         -movflags +faststart \
-        -y "$preview_path" >> "$LOG_FILE" 2>&1; then
+        -y "$preview_path" >> "$(get_stage_log_file)" 2>&1; then
 
         local preview_size=$(stat -c%s "$preview_path" 2>/dev/null || echo "0")
         local preview_size_mb=$((preview_size / 1024 / 1024))
@@ -203,7 +206,7 @@ encode_iso() {
     while [[ $attempt -le $MAX_RETRIES ]]; do
         log_info "[ENCODER] Encode attempt $attempt/$MAX_RETRIES"
 
-        if eval "$handbrake_cmd" >> "$LOG_FILE" 2>&1; then
+        if eval "$handbrake_cmd" >> "$(get_stage_log_file)" 2>&1; then
             success=true
             break
         else
@@ -518,7 +521,7 @@ encode_iso_from_encoding() {
     while [[ $attempt -le $MAX_RETRIES ]]; do
         log_info "[ENCODER] Encode attempt $attempt/$MAX_RETRIES"
 
-        if eval "$handbrake_cmd" >> "$LOG_FILE" 2>&1; then
+        if eval "$handbrake_cmd" >> "$(get_stage_log_file)" 2>&1; then
             success=true
             break
         else

@@ -11,6 +11,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source utility functions
 source "${SCRIPT_DIR}/dvd-utils.sh"
 
+# Set logging stage for per-stage log routing
+CURRENT_STAGE="iso"
+
 # Configuration (overridden by config file)
 DVD_DEVICE="${DVD_DEVICE:-/dev/sr0}"
 
