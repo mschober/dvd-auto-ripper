@@ -113,6 +113,13 @@ create_dvd_iso() {
 check_iso_recovery() {
     log_info "[ISO] Checking for interrupted ISO operations..."
 
+    # Skip recovery if other ISO processes are active
+    # This prevents cleaning up ISOs being created by parallel drives
+    if has_other_active_iso_locks "$CURRENT_DEVICE"; then
+        log_info "[ISO] Other ISO processes active, skipping recovery check"
+        return 0
+    fi
+
     # Check for interrupted ISO creations
     local interrupted=$(find_state_files "iso-creating")
     if [[ -n "$interrupted" ]]; then
