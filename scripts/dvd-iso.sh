@@ -142,6 +142,9 @@ main() {
     local device="${1:-$DVD_DEVICE}"
     local device_name="${device##*/}"  # Extract device name: /dev/sr0 -> sr0
 
+    # Set device for per-drive logging (enables separate progress tracking)
+    CURRENT_DEVICE="$device_name"
+
     # Initialize
     init_logging || exit 1
     ensure_staging_dir

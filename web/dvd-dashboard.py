@@ -271,18 +271,43 @@ def get_active_progress():
     iso_drives = iso_status.get("drives", {})
     active_iso_drives = [d for d, info in iso_drives.items() if info.get("active")]
 
-    if iso_status.get("active"):
-        iso_matches = re.findall(
-            r'pct rescued:\s*(\d+\.?\d*)%.*?remaining time:\s*(\d+m|\d+s|n/a)',
-            logs
-        )
-        if iso_matches:
-            last_match = iso_matches[-1]
-            progress["iso"] = {
-                "percent": float(last_match[0]),
-                "eta": last_match[1] if last_match[1] != "n/a" else "finishing...",
-                "drives": active_iso_drives  # List of active drive names (sr0, sr1, etc.)
-            }
+    if iso_status.get("active") and active_iso_drives:
+        iso_progress_list = []
+        for drive in active_iso_drives:
+            # Read per-device log file for this drive
+            device_log_file = os.path.join(LOG_DIR, f"iso-{drive}.log")
+            drive_logs = ""
+            if os.path.exists(device_log_file):
+                try:
+                    with open(device_log_file, 'r') as f:
+                        # Read last 50 lines for recent progress
+                        lines = f.readlines()
+                        drive_logs = ''.join(lines[-50:])
+                except Exception:
+                    pass
+
+            # Parse ddrescue progress from this drive's log
+            iso_matches = re.findall(
+                r'pct rescued:\s*(\d+\.?\d*)%.*?remaining time:\s*(\d+m|\d+s|n/a)',
+                drive_logs
+            )
+            if iso_matches:
+                last_match = iso_matches[-1]
+                iso_progress_list.append({
+                    "drive": drive,
+                    "percent": float(last_match[0]),
+                    "eta": last_match[1] if last_match[1] != "n/a" else "finishing..."
+                })
+            else:
+                # Drive is active but no progress yet (just started)
+                iso_progress_list.append({
+                    "drive": drive,
+                    "percent": 0.0,
+                    "eta": "starting..."
+                })
+
+        if iso_progress_list:
+            progress["iso"] = iso_progress_list
 
     # Parse rsync cluster distribution progress (during encoder lock with .distributing file)
     # Pattern: "XXX,XXX,XXX  XX%  XX.XXMB/s    X:XX:XX"
@@ -1841,15 +1866,17 @@ DASHBOARD_HTML = """
             </div>
             <div class="progress-section" id="progress-section">
                 {% if progress.iso %}
+                {% for iso in progress.iso %}
                 <div class="progress-item">
                     <div class="progress-header">
-                        <span class="progress-label">ISO Creation{% if progress.iso.drives %} ({{ progress.iso.drives|join(', ') }}){% endif %}</span>
-                        <span class="progress-stats">{{ "%.1f"|format(progress.iso.percent) }}% | ETA: {{ progress.iso.eta }}</span>
+                        <span class="progress-label">ISO Creation ({{ iso.drive }})</span>
+                        <span class="progress-stats">{{ "%.1f"|format(iso.percent) }}% | ETA: {{ iso.eta }}</span>
                     </div>
                     <div class="progress-bar">
-                        <div class="progress-fill progress-iso" style="width: {{ progress.iso.percent }}%"></div>
+                        <div class="progress-fill progress-iso" style="width: {{ iso.percent }}%"></div>
                     </div>
                 </div>
+                {% endfor %}
                 {% endif %}
                 {% if progress.encoder %}
                 <div class="progress-item">
@@ -1983,17 +2010,19 @@ DASHBOARD_HTML = """
 
                 let html = '';
 
-                if (data.iso) {
-                    html += `
-                        <div class="progress-item">
-                            <div class="progress-header">
-                                <span class="progress-label">ISO Creation</span>
-                                <span class="progress-stats">${data.iso.percent.toFixed(1)}% | ETA: ${data.iso.eta}</span>
-                            </div>
-                            <div class="progress-bar">
-                                <div class="progress-fill progress-iso" style="width: ${data.iso.percent}%"></div>
-                            </div>
-                        </div>`;
+                if (data.iso && Array.isArray(data.iso)) {
+                    data.iso.forEach(iso => {
+                        html += `
+                            <div class="progress-item">
+                                <div class="progress-header">
+                                    <span class="progress-label">ISO Creation (${iso.drive})</span>
+                                    <span class="progress-stats">${iso.percent.toFixed(1)}% | ETA: ${iso.eta}</span>
+                                </div>
+                                <div class="progress-bar">
+                                    <div class="progress-fill progress-iso" style="width: ${iso.percent}%"></div>
+                                </div>
+                            </div>`;
+                    });
                 }
 
                 if (data.encoder) {
@@ -2035,7 +2064,7 @@ DASHBOARD_HTML = """
                         </div>`;
                 }
 
-                if (!data.iso && !data.encoder && !data.distributing && !data.transfer) {
+                if ((!data.iso || data.iso.length === 0) && !data.encoder && !data.distributing && !data.transfer) {
                     html = '<p style="color: #666; font-size: 13px; margin: 12px 0 0 0;">No active operations</p>';
                 }
 
