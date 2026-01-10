@@ -868,6 +868,34 @@ release_stage_lock() {
     fi
 }
 
+# Check if there are other active ISO locks (besides our own device)
+# Usage: has_other_active_iso_locks [EXCLUDE_DEVICE]
+# EXCLUDE_DEVICE: Device to exclude from check (e.g., "sr0")
+# Returns: 0 if other active locks exist, 1 if none
+has_other_active_iso_locks() {
+    local exclude_device="${1:-}"
+    local lock_dir="/run/dvd-ripper"
+
+    for lock_file in "$lock_dir"/iso-*.lock; do
+        [[ -f "$lock_file" ]] || continue
+
+        # Skip our own device's lock
+        if [[ -n "$exclude_device" ]]; then
+            local lock_device="${lock_file##*/iso-}"
+            lock_device="${lock_device%.lock}"
+            [[ "$lock_device" == "$exclude_device" ]] && continue
+        fi
+
+        # Check if the lock is held by an active process
+        local pid=$(cat "$lock_file" 2>/dev/null)
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            return 0  # Found active lock
+        fi
+    done
+
+    return 1  # No other active locks
+}
+
 # ============================================================================
 # Pipeline Mode: Parallel Encoding Support
 # ============================================================================

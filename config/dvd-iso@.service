@@ -1,7 +1,9 @@
 [Unit]
 Description=DVD ISO Creation for %I (Pipeline Stage 1)
 Documentation=https://github.com/mschober/dvd-auto-ripper
-After=multi-user.target
+# Use sysinit.target instead of multi-user.target so udev triggers work
+# even if boot is slow/stuck (multi-user.target requires full boot)
+After=sysinit.target
 
 [Service]
 Type=simple
