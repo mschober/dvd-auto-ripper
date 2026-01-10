@@ -205,9 +205,27 @@ def get_lock_status():
     """Check which stages are currently locked/running."""
     status = {}
 
-    # Check non-ISO locks (encoder, transfer, distribute)
-    for stage, lock_file in LOCK_FILES.items():
-        status[stage] = check_lock_file(lock_file)
+    # Check transfer and distribute locks (single instance)
+    for stage in ["transfer", "distribute"]:
+        status[stage] = check_lock_file(LOCK_FILES[stage])
+
+    # Check parallel encoder locks (encoder-1.lock, encoder-2.lock, etc.)
+    encoder_locks = glob.glob(os.path.join(LOCK_DIR, "encoder-*.lock"))
+    encoder_slots = {}
+    for lock_file in encoder_locks:
+        # Extract slot number: encoder-1.lock -> 1
+        slot = os.path.basename(lock_file).replace("encoder-", "").replace(".lock", "")
+        encoder_slots[slot] = check_lock_file(lock_file)
+
+    # Also check legacy encoder.lock for backwards compatibility
+    legacy_encoder = LOCK_FILES["encoder"]
+    legacy_status = check_lock_file(legacy_encoder)
+    if legacy_status["active"]:
+        encoder_slots["legacy"] = legacy_status
+
+    # Provide combined "encoder" status (active if any slot is active)
+    any_encoder_active = any(s.get("active") for s in encoder_slots.values())
+    status["encoder"] = {"active": any_encoder_active, "pid": None, "slots": encoder_slots}
 
     # Check per-device ISO locks (iso-sr0.lock, iso-sr1.lock, etc.)
     iso_locks = glob.glob(os.path.join(LOCK_DIR, "iso-*.lock"))
