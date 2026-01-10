@@ -710,14 +710,23 @@ create_directories() {
     chmod 770 "$log_dir"
     chown root:dvd-ripper "$log_dir"
 
-    # Create per-stage log files
+    # Create per-stage log files (owned by respective service users)
+    # dvd-rip owns iso.log, dvd-encode owns encoder.log, etc.
+    # This allows touch() to work for timestamp updates
+    declare -A log_owners=(
+        [iso]="dvd-rip"
+        [encoder]="dvd-encode"
+        [transfer]="dvd-transfer"
+        [distribute]="dvd-distribute"
+    )
     for log_name in iso encoder transfer distribute; do
         local log_file="${log_dir}/${log_name}.log"
+        local owner="${log_owners[$log_name]}"
         if [[ ! -f "$log_file" ]]; then
             touch "$log_file"
         fi
         chmod 660 "$log_file"
-        chown root:dvd-ripper "$log_file"
+        chown "${owner}:dvd-ripper" "$log_file"
     done
     print_info "✓ Log directory: $log_dir (mode 770, group dvd-ripper)"
     print_info "  Log files: iso.log, encoder.log, transfer.log, distribute.log"
