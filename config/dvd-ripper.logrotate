@@ -1,7 +1,7 @@
 # Logrotate configuration for DVD Ripper
 # Installation: sudo cp dvd-ripper.logrotate /etc/logrotate.d/dvd-ripper
 
-/var/log/dvd-ripper.log {
+/var/log/dvd-ripper/*.log {
     # Rotate daily
     daily
 
@@ -26,6 +26,9 @@
     # Use date as suffix for rotated logs
     dateext
     dateformat -%Y%m%d
+
+    # Share rotation for all log files in directory
+    sharedscripts
 
     # Run these commands after rotation (optional)
     # postrotate

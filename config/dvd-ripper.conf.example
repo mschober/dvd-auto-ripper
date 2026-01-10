@@ -100,8 +100,13 @@ MIN_FILE_SIZE_MB="100"
 # Logging Configuration
 # ============================================================================
 
-# Log file location
-LOG_FILE="/var/log/dvd-ripper.log"
+# Log directory for per-stage log files
+# Each pipeline stage writes to its own log:
+#   - iso.log: DVD ISO creation (Stage 1)
+#   - encoder.log: HandBrake encoding (Stage 2)
+#   - transfer.log: NAS/Plex transfer (Stage 3)
+#   - distribute.log: Cluster distribution
+LOG_DIR="/var/log/dvd-ripper"
 
 # Log level: DEBUG, INFO, WARN, ERROR
 # DEBUG = Verbose output for troubleshooting

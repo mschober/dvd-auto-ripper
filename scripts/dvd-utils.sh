@@ -10,12 +10,22 @@ fi
 
 # Default configuration values (overridden by config file)
 STAGING_DIR="${STAGING_DIR:-/var/tmp/dvd-rips}"
-LOG_FILE="${LOG_FILE:-/var/log/dvd-ripper.log}"
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
 LOCK_FILE="${LOCK_FILE:-/run/dvd-ripper/dvd-ripper.pid}"
 MAX_RETRIES="${MAX_RETRIES:-3}"
 RETRY_DELAY="${RETRY_DELAY:-60}"
 DISK_USAGE_THRESHOLD="${DISK_USAGE_THRESHOLD:-80}"
+
+# Per-stage logging configuration
+LOG_DIR="${LOG_DIR:-/var/log/dvd-ripper}"
+LOG_FILE_ISO="${LOG_DIR}/iso.log"
+LOG_FILE_ENCODER="${LOG_DIR}/encoder.log"
+LOG_FILE_TRANSFER="${LOG_DIR}/transfer.log"
+LOG_FILE_DISTRIBUTE="${LOG_DIR}/distribute.log"
+
+# Current stage (set by each pipeline script)
+# Valid values: iso, encoder, transfer, distribute
+CURRENT_STAGE=""
 
 # Log levels
 declare -A LOG_LEVELS=([DEBUG]=0 [INFO]=1 [WARN]=2 [ERROR]=3)
@@ -25,6 +35,18 @@ CURRENT_LOG_LEVEL=${LOG_LEVELS[$LOG_LEVEL]:-1}
 # Logging Functions
 # ============================================================================
 
+# Get log file path for current stage
+# Returns: path to stage-specific log file
+get_stage_log_file() {
+    case "$CURRENT_STAGE" in
+        iso)        echo "$LOG_FILE_ISO" ;;
+        encoder)    echo "$LOG_FILE_ENCODER" ;;
+        transfer)   echo "$LOG_FILE_TRANSFER" ;;
+        distribute) echo "$LOG_FILE_DISTRIBUTE" ;;
+        *)          echo "$LOG_FILE_ISO" ;;  # Default to iso.log
+    esac
+}
+
 # Log message with timestamp and level
 # Usage: log_message LEVEL "message"
 log_message() {
@@ -33,10 +55,11 @@ log_message() {
     local message="$*"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     local level_num=${LOG_LEVELS[$level]:-1}
+    local log_file=$(get_stage_log_file)
 
     # Only log if message level >= current log level
     if [[ $level_num -ge $CURRENT_LOG_LEVEL ]]; then
-        echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
+        echo "[$timestamp] [$level] $message" >> "$log_file"
     fi
 }
 
@@ -233,7 +256,7 @@ create_iso() {
     # Run ddrescue with error recovery
     # -n = no scraping (faster initial pass)
     # -b 2048 = DVD sector size
-    if ddrescue -n -b 2048 "$device" "$output_iso" "$mapfile" >> "$LOG_FILE" 2>&1; then
+    if ddrescue -n -b 2048 "$device" "$output_iso" "$mapfile" >> "$(get_stage_log_file)" 2>&1; then
         log_info "ISO creation completed successfully"
 
         # Verify ISO file exists and has reasonable size
@@ -488,15 +511,15 @@ transfer_to_nas() {
 
         if [[ "$NAS_TRANSFER_METHOD" == "rsync" ]]; then
             if [[ -n "$ssh_opts" ]]; then
-                rsync -avz --progress -e "ssh $ssh_opts" "$local_file" "${NAS_USER}@${NAS_HOST}:${NAS_PATH}/" >> "$LOG_FILE" 2>&1
+                rsync -avz --progress -e "ssh $ssh_opts" "$local_file" "${NAS_USER}@${NAS_HOST}:${NAS_PATH}/" >> "$(get_stage_log_file)" 2>&1
             else
-                rsync -avz --progress "$local_file" "${NAS_USER}@${NAS_HOST}:${NAS_PATH}/" >> "$LOG_FILE" 2>&1
+                rsync -avz --progress "$local_file" "${NAS_USER}@${NAS_HOST}:${NAS_PATH}/" >> "$(get_stage_log_file)" 2>&1
             fi
         else
             if [[ -n "$ssh_opts" ]]; then
-                scp $ssh_opts "$local_file" "${NAS_USER}@${NAS_HOST}:${remote_path}" >> "$LOG_FILE" 2>&1
+                scp $ssh_opts "$local_file" "${NAS_USER}@${NAS_HOST}:${remote_path}" >> "$(get_stage_log_file)" 2>&1
             else
-                scp "$local_file" "${NAS_USER}@${NAS_HOST}:${remote_path}" >> "$LOG_FILE" 2>&1
+                scp "$local_file" "${NAS_USER}@${NAS_HOST}:${remote_path}" >> "$(get_stage_log_file)" 2>&1
             fi
         fi
 
@@ -553,7 +576,7 @@ eject_disc() {
     # This handles desktop-automounted discs at /media/username/...
     if command -v udisksctl &>/dev/null; then
         log_debug "Attempting unmount via udisksctl"
-        if udisksctl unmount -b "$block_device" 2>&1 | tee -a "$LOG_FILE"; then
+        if udisksctl unmount -b "$block_device" 2>&1 | tee -a "$(get_stage_log_file)"; then
             log_debug "udisksctl unmount successful"
         else
             # Not an error - disc might not be mounted
@@ -564,7 +587,7 @@ eject_disc() {
     # Now eject - retry a few times in case device is briefly busy
     local attempt
     for attempt in 1 2 3; do
-        if eject "$block_device" 2>&1 | tee -a "$LOG_FILE"; then
+        if eject "$block_device" 2>&1 | tee -a "$(get_stage_log_file)"; then
             log_info "Disc ejected successfully"
             return 0
         fi
@@ -723,15 +746,20 @@ ensure_staging_dir() {
 }
 
 # Initialize logging
+# Creates log directory and ensures stage-specific log file is writable
 init_logging() {
-    local log_dir=$(dirname "$LOG_FILE")
-    if [[ ! -d "$log_dir" ]]; then
-        mkdir -p "$log_dir"
+    # Create log directory if it doesn't exist
+    if [[ ! -d "$LOG_DIR" ]]; then
+        mkdir -p "$LOG_DIR"
+        chmod 770 "$LOG_DIR"
     fi
 
+    # Get the log file for the current stage
+    local log_file=$(get_stage_log_file)
+
     # Ensure log file is writable
-    touch "$LOG_FILE" 2>/dev/null || {
-        echo "ERROR: Cannot write to log file: $LOG_FILE" >&2
+    touch "$log_file" 2>/dev/null || {
+        echo "ERROR: Cannot write to log file: $log_file" >&2
         return 1
     }
 
@@ -1232,7 +1260,7 @@ distribute_to_peer() {
     local remote_dest="${CLUSTER_SSH_USER}@${peer_host}:${CLUSTER_REMOTE_STAGING}/"
     log_info "[CLUSTER] Rsync ISO to $remote_dest"
 
-    if ! rsync -avz --progress "$iso_path" "$remote_dest" >> "$LOG_FILE" 2>&1; then
+    if ! rsync -avz --progress "$iso_path" "$remote_dest" >> "$(get_stage_log_file)" 2>&1; then
         log_error "[CLUSTER] ISO transfer to $peer_name failed"
         # Revert state
         remove_state_file "$dist_state"
@@ -1244,7 +1272,7 @@ distribute_to_peer() {
 
     # Also transfer CSS keys directory if it exists (for cluster decryption)
     if [[ -d "${iso_path}.keys" ]]; then
-        if rsync -avz "${iso_path}.keys" "$remote_dest" >> "$LOG_FILE" 2>&1; then
+        if rsync -avz "${iso_path}.keys" "$remote_dest" >> "$(get_stage_log_file)" 2>&1; then
             log_info "[CLUSTER] CSS keys transferred to $peer_name"
         else
             log_warn "[CLUSTER] Could not transfer CSS keys to $peer_name (encoding may need to crack keys)"

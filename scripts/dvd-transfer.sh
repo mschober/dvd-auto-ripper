@@ -11,6 +11,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source utility functions
 source "${SCRIPT_DIR}/dvd-utils.sh"
 
+# Set logging stage for per-stage log routing
+CURRENT_STAGE="transfer"
+
 # Configuration (overridden by config file)
 NAS_ENABLED="${NAS_ENABLED:-0}"
 NAS_FILE_OWNER="${NAS_FILE_OWNER:-plex:plex}"
@@ -91,7 +94,7 @@ return_remote_job() {
     local mkv_size_mb=$((mkv_size / 1024 / 1024))
     log_info "[TRANSFER] Transferring ${mkv_size_mb}MB to origin"
 
-    if ! rsync -avz --progress "$mkv_path" "$remote_dest" >> "$LOG_FILE" 2>&1; then
+    if ! rsync -avz --progress "$mkv_path" "$remote_dest" >> "$(get_stage_log_file)" 2>&1; then
         log_error "[TRANSFER] MKV transfer to origin failed"
         # Revert state
         remove_state_file "$state_file_transferring"
