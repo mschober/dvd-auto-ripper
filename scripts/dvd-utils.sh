@@ -265,7 +265,8 @@ get_dvd_info() {
 
     # Run handbrake scan and capture output
     # Note: HandBrake --scan returns non-zero exit code even on success
-    scan_output=$(HandBrakeCLI --scan -i "$device" 2>&1)
+    # Use -t 0 to scan ALL titles so we can find the longest one
+    scan_output=$(HandBrakeCLI --scan -t 0 -i "$device" 2>&1)
 
     # Check if we got valid output instead of relying on exit code
     if [[ -z "$scan_output" ]] || ! echo "$scan_output" | grep -q "scan:"; then
