@@ -137,6 +137,7 @@ check_iso_recovery() {
 
 main() {
     local device="${1:-$DVD_DEVICE}"
+    local device_name="${device##*/}"  # Extract device name: /dev/sr0 -> sr0
 
     # Initialize
     init_logging || exit 1
@@ -145,14 +146,14 @@ main() {
     log_info "[ISO] ==================== DVD ISO Creator Started ===================="
     log_info "[ISO] Device: $device"
 
-    # Acquire stage lock (non-blocking for ISO stage)
-    if ! acquire_stage_lock "iso"; then
-        log_error "[ISO] Another ISO creation is already running"
+    # Acquire per-device stage lock (allows parallel ripping from multiple drives)
+    if ! acquire_stage_lock "iso" "$device_name"; then
+        log_error "[ISO] Another ISO creation is already running on $device"
         exit 1
     fi
 
-    # Set up cleanup trap
-    trap 'release_stage_lock "iso"; log_info "[ISO] DVD ISO Creator stopped"' EXIT INT TERM
+    # Set up cleanup trap with device-specific lock release
+    trap 'release_stage_lock "iso" "'"$device_name"'"; log_info "[ISO] DVD ISO Creator stopped"' EXIT INT TERM
 
     # Check for recovery scenarios
     check_iso_recovery

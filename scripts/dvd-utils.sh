@@ -750,15 +750,24 @@ TRANSFER_LOCK_FILE="${TRANSFER_LOCK_FILE:-/run/dvd-ripper/transfer.lock}"
 DISTRIBUTE_LOCK_FILE="${DISTRIBUTE_LOCK_FILE:-/run/dvd-ripper/distribute.lock}"
 
 # Acquire stage-specific lock (non-blocking)
-# Usage: acquire_stage_lock STAGE
+# Usage: acquire_stage_lock STAGE [DEVICE]
 # STAGE: iso, encoder, transfer, distribute
+# DEVICE: Optional device identifier for per-device locks (e.g., "sr0" for ISO stage)
 # Returns: 0 if acquired, 1 if already locked
 acquire_stage_lock() {
     local stage="$1"
+    local device="${2:-}"  # Optional device identifier for per-device locks
     local lock_file
 
     case "$stage" in
-        iso)        lock_file="$ISO_LOCK_FILE" ;;
+        iso)
+            if [[ -n "$device" ]]; then
+                # Per-device lock for parallel ISO ripping from multiple drives
+                lock_file="/run/dvd-ripper/iso-${device}.lock"
+            else
+                lock_file="$ISO_LOCK_FILE"
+            fi
+            ;;
         encoder)    lock_file="$ENCODER_LOCK_FILE" ;;
         transfer)   lock_file="$TRANSFER_LOCK_FILE" ;;
         distribute) lock_file="$DISTRIBUTE_LOCK_FILE" ;;
@@ -786,13 +795,22 @@ acquire_stage_lock() {
 }
 
 # Release stage-specific lock
-# Usage: release_stage_lock STAGE
+# Usage: release_stage_lock STAGE [DEVICE]
+# DEVICE: Optional device identifier for per-device locks (e.g., "sr0" for ISO stage)
 release_stage_lock() {
     local stage="$1"
+    local device="${2:-}"  # Optional device identifier for per-device locks
     local lock_file
 
     case "$stage" in
-        iso)        lock_file="$ISO_LOCK_FILE" ;;
+        iso)
+            if [[ -n "$device" ]]; then
+                # Per-device lock for parallel ISO ripping from multiple drives
+                lock_file="/run/dvd-ripper/iso-${device}.lock"
+            else
+                lock_file="$ISO_LOCK_FILE"
+            fi
+            ;;
         encoder)    lock_file="$ENCODER_LOCK_FILE" ;;
         transfer)   lock_file="$TRANSFER_LOCK_FILE" ;;
         distribute) lock_file="$DISTRIBUTE_LOCK_FILE" ;;

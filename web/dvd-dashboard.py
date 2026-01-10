@@ -29,12 +29,13 @@ PIPELINE_VERSION_FILE = os.environ.get("PIPELINE_VERSION_FILE", "/usr/local/bin/
 DASHBOARD_VERSION = "1.7.0"
 GITHUB_URL = "https://github.com/mschober/dvd-auto-ripper"
 
+LOCK_DIR = "/run/dvd-ripper"
 LOCK_FILES = {
-    "iso": "/run/dvd-ripper/iso.lock",
-    "encoder": "/run/dvd-ripper/encoder.lock",
-    "transfer": "/run/dvd-ripper/transfer.lock",
-    "distribute": "/run/dvd-ripper/distribute.lock"
+    "encoder": f"{LOCK_DIR}/encoder.lock",
+    "transfer": f"{LOCK_DIR}/transfer.lock",
+    "distribute": f"{LOCK_DIR}/distribute.lock"
 }
+# ISO locks are now per-device (iso-sr0.lock, iso-sr1.lock) and detected dynamically
 
 # State configuration for cancellation and reversion
 STATE_CONFIG = {
@@ -147,24 +148,49 @@ def get_recent_logs(lines=50):
         return "(unable to read log file)"
 
 
+def check_lock_file(lock_file):
+    """Check if a lock file exists and has an active process."""
+    if os.path.exists(lock_file):
+        try:
+            with open(lock_file, 'r') as f:
+                pid = f.read().strip()
+            # Check if process is actually running via /proc (works across users)
+            # os.kill(pid, 0) requires same-user or root permissions
+            if os.path.exists(f"/proc/{pid}"):
+                return {"active": True, "pid": pid}
+            else:
+                return {"active": False, "pid": None}
+        except (ValueError, IOError):
+            return {"active": False, "pid": None}
+    return {"active": False, "pid": None}
+
+
 def get_lock_status():
     """Check which stages are currently locked/running."""
     status = {}
+
+    # Check non-ISO locks (encoder, transfer, distribute)
     for stage, lock_file in LOCK_FILES.items():
-        if os.path.exists(lock_file):
-            try:
-                with open(lock_file, 'r') as f:
-                    pid = f.read().strip()
-                # Check if process is actually running via /proc (works across users)
-                # os.kill(pid, 0) requires same-user or root permissions
-                if os.path.exists(f"/proc/{pid}"):
-                    status[stage] = {"active": True, "pid": pid}
-                else:
-                    status[stage] = {"active": False, "pid": None}
-            except (ValueError, IOError):
-                status[stage] = {"active": False, "pid": None}
-        else:
-            status[stage] = {"active": False, "pid": None}
+        status[stage] = check_lock_file(lock_file)
+
+    # Check per-device ISO locks (iso-sr0.lock, iso-sr1.lock, etc.)
+    iso_locks = glob.glob(os.path.join(LOCK_DIR, "iso-*.lock"))
+    iso_drives = {}
+    for lock_file in iso_locks:
+        # Extract device name: iso-sr0.lock -> sr0
+        device = os.path.basename(lock_file).replace("iso-", "").replace(".lock", "")
+        iso_drives[device] = check_lock_file(lock_file)
+
+    # Also check legacy iso.lock for backwards compatibility
+    legacy_iso = os.path.join(LOCK_DIR, "iso.lock")
+    legacy_status = check_lock_file(legacy_iso)
+    if legacy_status["active"]:
+        iso_drives["default"] = legacy_status
+
+    # Provide combined "iso" status for backwards compat (active if any drive is active)
+    any_iso_active = any(d.get("active") for d in iso_drives.values())
+    status["iso"] = {"active": any_iso_active, "pid": None, "drives": iso_drives}
+
     return status
 
 
@@ -203,9 +229,13 @@ def get_active_progress():
                 "eta": last_match[2]
             }
 
-    # Parse ddrescue ISO creation progress
+    # Parse ddrescue ISO creation progress (per-device)
     # Pattern: "pct rescued:  XX.XX%, read errors:        0,  remaining time:         Xm"
-    if locks.get("iso", {}).get("active"):
+    iso_status = locks.get("iso", {})
+    iso_drives = iso_status.get("drives", {})
+    active_iso_drives = [d for d, info in iso_drives.items() if info.get("active")]
+
+    if iso_status.get("active"):
         iso_matches = re.findall(
             r'pct rescued:\s*(\d+\.?\d*)%.*?remaining time:\s*(\d+m|\d+s|n/a)',
             logs
@@ -214,7 +244,8 @@ def get_active_progress():
             last_match = iso_matches[-1]
             progress["iso"] = {
                 "percent": float(last_match[0]),
-                "eta": last_match[1] if last_match[1] != "n/a" else "finishing..."
+                "eta": last_match[1] if last_match[1] != "n/a" else "finishing...",
+                "drives": active_iso_drives  # List of active drive names (sr0, sr1, etc.)
             }
 
     # Parse rsync cluster distribution progress (during encoder lock with .distributing file)
@@ -764,6 +795,24 @@ def revert_state_file(state_file_path, new_state):
 
 def find_process_for_lock(lock_stage):
     """Find PID of process from lock file if it's still running."""
+    # Handle per-device ISO locks
+    if lock_stage == "iso":
+        # Check all per-device ISO locks (iso-sr0.lock, iso-sr1.lock, etc.)
+        iso_locks = glob.glob(os.path.join(LOCK_DIR, "iso-*.lock"))
+        # Also check legacy iso.lock
+        legacy_iso = os.path.join(LOCK_DIR, "iso.lock")
+        if os.path.exists(legacy_iso):
+            iso_locks.append(legacy_iso)
+        for lock_file in iso_locks:
+            try:
+                with open(lock_file, 'r') as f:
+                    pid = int(f.read().strip())
+                if os.path.exists(f"/proc/{pid}"):
+                    return pid
+            except (ValueError, IOError):
+                pass
+        return None
+
     if lock_stage not in LOCK_FILES:
         return None
     lock_file = LOCK_FILES[lock_stage]
@@ -828,12 +877,32 @@ def cancel_queue_item(state_file_name, delete_files=False):
                 messages.append(f"Could not kill process: {e}")
 
         # Clean up lock file
-        lock_file = LOCK_FILES[config["lock"]]
-        if os.path.exists(lock_file):
-            try:
-                os.remove(lock_file)
-            except Exception:
-                pass
+        if config["lock"] == "iso":
+            # For ISO, clean up all per-device lock files (process trap should handle this,
+            # but clean up any stale locks just in case)
+            for lock_file in glob.glob(os.path.join(LOCK_DIR, "iso-*.lock")):
+                try:
+                    with open(lock_file, 'r') as f:
+                        lock_pid = int(f.read().strip())
+                    # Only remove if this was the process we killed
+                    if lock_pid == pid:
+                        os.remove(lock_file)
+                except Exception:
+                    pass
+            # Also check legacy lock
+            legacy_iso = os.path.join(LOCK_DIR, "iso.lock")
+            if os.path.exists(legacy_iso):
+                try:
+                    os.remove(legacy_iso)
+                except Exception:
+                    pass
+        elif config["lock"] in LOCK_FILES:
+            lock_file = LOCK_FILES[config["lock"]]
+            if os.path.exists(lock_file):
+                try:
+                    os.remove(lock_file)
+                except Exception:
+                    pass
 
     # Clean up partial files for active states
     if state == "iso-creating":
@@ -1704,6 +1773,26 @@ DASHBOARD_HTML = """
             <h2>Active Processes</h2>
             <div class="lock-status">
                 {% for stage, status in locks.items() %}
+                {% if stage == 'iso' %}
+                {# Per-drive ISO status #}
+                {% if status.drives %}
+                {% for drive, drive_status in status.drives.items() %}
+                <div class="lock-item">
+                    <div class="lock-dot {% if drive_status.active %}lock-active{% else %}lock-idle{% endif %}"></div>
+                    <span>
+                        <strong>iso ({{ drive }})</strong>
+                        {% if drive_status.active %}<span style="color: #666;">(PID {{ drive_status.pid }})</span>{% endif %}
+                    </span>
+                </div>
+                {% endfor %}
+                {% else %}
+                {# No drives detected, show generic ISO status #}
+                <div class="lock-item">
+                    <div class="lock-dot lock-idle"></div>
+                    <span><strong>iso</strong></span>
+                </div>
+                {% endif %}
+                {% else %}
                 <div class="lock-item">
                     <div class="lock-dot {% if status.active %}lock-active{% else %}lock-idle{% endif %}"></div>
                     <span>
@@ -1711,13 +1800,14 @@ DASHBOARD_HTML = """
                         {% if status.active %}<span style="color: #666;">(PID {{ status.pid }})</span>{% endif %}
                     </span>
                 </div>
+                {% endif %}
                 {% endfor %}
             </div>
             <div class="progress-section" id="progress-section">
                 {% if progress.iso %}
                 <div class="progress-item">
                     <div class="progress-header">
-                        <span class="progress-label">ISO Creation</span>
+                        <span class="progress-label">ISO Creation{% if progress.iso.drives %} ({{ progress.iso.drives|join(', ') }}){% endif %}</span>
                         <span class="progress-stats">{{ "%.1f"|format(progress.iso.percent) }}% | ETA: {{ progress.iso.eta }}</span>
                     </div>
                     <div class="progress-bar">
