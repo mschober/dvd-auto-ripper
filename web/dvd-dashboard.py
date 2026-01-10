@@ -315,19 +315,42 @@ def get_active_progress():
         # Load all .encoding files to map slots to titles
         encoding_files = glob.glob(os.path.join(STAGING_DIR, "*.encoding"))
         slot_to_title = {}
+        all_titles = []  # For fallback when encoder_slot not set
         for ef in encoding_files:
             try:
                 with open(ef, 'r') as f:
                     meta = json.load(f)
                     slot = meta.get("encoder_slot", "")
                     title = meta.get("title", "").replace('_', ' ')
+                    if title:
+                        all_titles.append(title)
                     if slot and title:
                         slot_to_title[slot] = title
             except Exception:
                 pass
 
+        # Check if any per-slot logs exist (new behavior)
+        has_per_slot_logs = any(
+            os.path.exists(os.path.join(LOG_DIR, f"encoder-{slot}.log"))
+            for slot in active_slots
+        )
+
+        # Fallback: read legacy encoder.log if no per-slot logs exist
+        legacy_logs = ""
+        if not has_per_slot_logs:
+            encoder_log = LOG_FILES.get("encoder", "")
+            if encoder_log and os.path.exists(encoder_log):
+                try:
+                    with open(encoder_log, 'r') as f:
+                        f.seek(0, 2)
+                        size = f.tell()
+                        f.seek(max(0, size - 10240))
+                        legacy_logs = f.read()
+                except Exception:
+                    pass
+
         encoder_progress_list = []
-        for slot in active_slots:
+        for idx, slot in enumerate(active_slots):
             # Read per-slot log file
             slot_log_file = os.path.join(LOG_DIR, f"encoder-{slot}.log")
             slot_logs = ""
@@ -347,7 +370,12 @@ def get_active_progress():
                 slot_logs
             )
 
-            title = slot_to_title.get(slot, f"Slot {slot}")
+            # Get title: prefer slot mapping, fallback to all_titles by index
+            title = slot_to_title.get(slot)
+            if not title and idx < len(all_titles):
+                title = all_titles[idx]
+            if not title:
+                title = f"Slot {slot}"
 
             if encoder_matches:
                 last_match = encoder_matches[-1]
@@ -358,6 +386,30 @@ def get_active_progress():
                     "speed": f"{last_match[1]} fps",
                     "eta": last_match[2]
                 })
+            elif legacy_logs:
+                # Fallback: use legacy log progress (shared between encoders)
+                legacy_matches = re.findall(
+                    r'Encoding:.*?(\d+\.?\d*)\s*%.*?(\d+\.?\d*)\s*fps.*?ETA\s*(\d+h\d+m\d+s|\d+m\d+s)',
+                    legacy_logs
+                )
+                if legacy_matches:
+                    last_match = legacy_matches[-1]
+                    encoder_progress_list.append({
+                        "slot": slot,
+                        "title": title,
+                        "percent": float(last_match[0]),
+                        "speed": f"{last_match[1]} fps",
+                        "eta": last_match[2],
+                        "shared_log": True  # Indicates progress from shared log
+                    })
+                else:
+                    encoder_progress_list.append({
+                        "slot": slot,
+                        "title": title,
+                        "percent": 0,
+                        "speed": "starting",
+                        "eta": "calculating"
+                    })
             else:
                 # Encoding active but no progress yet
                 encoder_progress_list.append({
