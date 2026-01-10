@@ -32,7 +32,7 @@ LOG_FILES = {
 }
 CONFIG_FILE = os.environ.get("CONFIG_FILE", "/etc/dvd-ripper.conf")
 PIPELINE_VERSION_FILE = os.environ.get("PIPELINE_VERSION_FILE", "/usr/local/bin/VERSION")
-DASHBOARD_VERSION = "1.8.0"
+DASHBOARD_VERSION = "1.9.0"
 GITHUB_URL = "https://github.com/mschober/dvd-auto-ripper"
 
 LOCK_DIR = "/run/dvd-ripper"
@@ -230,12 +230,48 @@ def get_lock_status():
     return status
 
 
+def get_receiving_transfers():
+    """
+    Detect incoming rsync transfers by looking for temp files.
+    Rsync creates temp files like .FILENAME.XXXXXX while transferring.
+    Returns list of receiving transfers with filename and current size.
+    """
+    receiving = []
+
+    try:
+        for entry in os.listdir(STAGING_DIR):
+            # Rsync temp files start with . and have .iso. in the name
+            # Example: .FAR_FROM_HEAVEN-1768079402.iso.rxYU4v
+            if entry.startswith('.') and '.iso.' in entry:
+                # Extract original filename: .NAME-123.iso.rxYU4v -> NAME-123.iso
+                # Remove leading dot, then split on last dot to remove random suffix
+                name_without_dot = entry[1:]
+                parts = name_without_dot.rsplit('.', 1)
+                if len(parts) == 2 and parts[0].endswith('.iso'):
+                    original_name = parts[0]
+                    temp_path = os.path.join(STAGING_DIR, entry)
+                    try:
+                        size = os.path.getsize(temp_path)
+                        size_mb = size / (1024 * 1024)
+                        receiving.append({
+                            "filename": original_name,
+                            "size_mb": round(size_mb, 1),
+                            "temp_file": entry
+                        })
+                    except OSError:
+                        pass
+    except OSError:
+        pass
+
+    return receiving
+
+
 def get_active_progress():
     """
     Parse recent logs to extract progress for active processes.
     Returns dict with progress info for iso, encoder, distributing, and transfer stages.
     """
-    progress = {"iso": None, "encoder": None, "distributing": None, "transfer": None}
+    progress = {"iso": None, "encoder": None, "distributing": None, "transfer": None, "receiving": None}
     locks = get_lock_status()
 
     # Check for distributing state files (cluster distribution in progress)
@@ -375,6 +411,11 @@ def get_active_progress():
                 "speed": last_match[1],
                 "eta": last_match[2]
             }
+
+    # Detect incoming rsync transfers (receiving from cluster peers)
+    receiving = get_receiving_transfers()
+    if receiving:
+        progress["receiving"] = receiving
 
     return progress
 
@@ -1801,6 +1842,14 @@ DASHBOARD_HTML = """
         .progress-encoder { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
         .progress-distributing { background: linear-gradient(90deg, #ec4899, #f472b6); }
         .progress-transfer { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
+        .progress-receiving {
+            background: linear-gradient(90deg, #10b981, #34d399);
+            animation: pulse-receiving 2s ease-in-out infinite;
+        }
+        @keyframes pulse-receiving {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
         .queue-empty { color: #666; font-style: italic; padding: 20px 0; }
         a { color: #3b82f6; text-decoration: none; }
         a:hover { text-decoration: underline; }
@@ -1948,7 +1997,20 @@ DASHBOARD_HTML = """
                     </div>
                 </div>
                 {% endif %}
-                {% if not progress.iso and not progress.encoder and not progress.distributing and not progress.transfer %}
+                {% if progress.receiving %}
+                {% for recv in progress.receiving %}
+                <div class="progress-item">
+                    <div class="progress-header">
+                        <span class="progress-label">Receiving: {{ recv.filename | replace('_', ' ') }}</span>
+                        <span class="progress-stats">{{ recv.size_mb }} MB received</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill progress-receiving" style="width: 100%"></div>
+                    </div>
+                </div>
+                {% endfor %}
+                {% endif %}
+                {% if not progress.iso and not progress.encoder and not progress.distributing and not progress.transfer and not progress.receiving %}
                 <p style="color: #666; font-size: 13px; margin: 12px 0 0 0;">No active operations</p>
                 {% endif %}
             </div>
@@ -2101,7 +2163,23 @@ DASHBOARD_HTML = """
                         </div>`;
                 }
 
-                if ((!data.iso || data.iso.length === 0) && !data.encoder && !data.distributing && !data.transfer) {
+                if (data.receiving && Array.isArray(data.receiving)) {
+                    data.receiving.forEach(recv => {
+                        const displayName = recv.filename.replace(/_/g, ' ');
+                        html += `
+                            <div class="progress-item">
+                                <div class="progress-header">
+                                    <span class="progress-label">Receiving: ${displayName}</span>
+                                    <span class="progress-stats">${recv.size_mb} MB received</span>
+                                </div>
+                                <div class="progress-bar">
+                                    <div class="progress-fill progress-receiving" style="width: 100%"></div>
+                                </div>
+                            </div>`;
+                    });
+                }
+
+                if ((!data.iso || data.iso.length === 0) && !data.encoder && !data.distributing && !data.transfer && (!data.receiving || data.receiving.length === 0)) {
                     html = '<p style="color: #666; font-size: 13px; margin: 12px 0 0 0;">No active operations</p>';
                 }
 
