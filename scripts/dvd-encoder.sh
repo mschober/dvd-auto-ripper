@@ -173,6 +173,11 @@ encode_iso() {
     # Update metadata with MKV path
     metadata=$(build_state_metadata "$sanitized_title" "$year" "$timestamp" "$main_title" "$iso_path" "$output_path")
 
+    # Add encoder slot to metadata for dashboard progress tracking
+    if [[ -n "$ENCODER_SLOT" && "$ENCODER_SLOT" != "0" ]]; then
+        metadata=$(echo "$metadata" | sed 's/}$/,\n  "encoder_slot": "'"$ENCODER_SLOT"'"\n}/')
+    fi
+
     # Transition state: iso-ready -> encoding
     remove_state_file "$state_file"
     state_file_encoding=$(create_pipeline_state "encoding" "$sanitized_title" "$timestamp" "$metadata")
@@ -369,6 +374,8 @@ main() {
     if [[ "$ENCODER_SLOT" == "0" ]]; then
         log_debug "[ENCODER] Running in legacy single-encoder mode"
     else
+        # Use per-slot log file for parallel encoding progress tracking
+        export LOG_FILE_OVERRIDE="${LOG_DIR}/encoder-${ENCODER_SLOT}.log"
         log_info "[ENCODER] Acquired encoder slot $ENCODER_SLOT"
     fi
 
@@ -490,6 +497,11 @@ encode_iso_from_encoding() {
 
     # Update metadata with MKV path
     metadata=$(build_state_metadata "$sanitized_title" "$year" "$timestamp" "$main_title" "$iso_path" "$output_path")
+
+    # Add encoder slot to metadata for dashboard progress tracking
+    if [[ -n "$ENCODER_SLOT" && "$ENCODER_SLOT" != "0" ]]; then
+        metadata=$(echo "$metadata" | sed 's/}$/,\n  "encoder_slot": "'"$ENCODER_SLOT"'"\n}/')
+    fi
 
     # Update the .encoding state file with new metadata
     echo "$metadata" > "$state_file"

@@ -42,6 +42,12 @@ CURRENT_LOG_LEVEL=${LOG_LEVELS[$LOG_LEVEL]:-1}
 # Get log file path for current stage
 # Returns: path to stage-specific log file
 get_stage_log_file() {
+    # Allow override for parallel encoding (per-slot log files)
+    if [[ -n "${LOG_FILE_OVERRIDE:-}" ]]; then
+        echo "$LOG_FILE_OVERRIDE"
+        return
+    fi
+
     case "$CURRENT_STAGE" in
         iso)        echo "$LOG_FILE_ISO" ;;
         encoder)    echo "$LOG_FILE_ENCODER" ;;

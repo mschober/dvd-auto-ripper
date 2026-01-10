@@ -305,59 +305,71 @@ def get_active_progress():
     if not any(s["active"] for s in locks.values()) and not is_distributing:
         return progress
 
-    # Parse HandBrake encoding progress
+    # Parse HandBrake encoding progress (per-slot, like ISO per-drive)
     # Pattern: "Encoding: task X of Y, XX.XX % (XX.XX fps, avg XX.XX fps, ETA XXhXXmXXs)"
     encoder_status = locks.get("encoder", {})
     encoder_slots = encoder_status.get("slots", {})
     active_slots = [s for s, info in encoder_slots.items() if info.get("active")]
 
     if encoder_status.get("active") and active_slots:
-        # Get list of movies currently encoding (from .encoding state files)
+        # Load all .encoding files to map slots to titles
         encoding_files = glob.glob(os.path.join(STAGING_DIR, "*.encoding"))
-        encoding_titles = []
+        slot_to_title = {}
         for ef in encoding_files:
-            basename = os.path.basename(ef)
-            # Extract title: MOVIE_NAME-123456.encoding -> MOVIE_NAME
-            title_part = basename.rsplit('-', 1)[0] if '-' in basename else basename.replace('.encoding', '')
-            encoding_titles.append(title_part.replace('_', ' '))
-
-        # Read encoder log directly (not combined logs) to get progress
-        encoder_log = LOG_FILES.get("encoder", "")
-        encoder_logs = ""
-        if encoder_log and os.path.exists(encoder_log):
             try:
-                with open(encoder_log, 'r') as f:
-                    # Read last 10KB for recent progress (HandBrake uses \r updates)
-                    f.seek(0, 2)  # End of file
-                    size = f.tell()
-                    f.seek(max(0, size - 10240))  # Last 10KB
-                    encoder_logs = f.read()
+                with open(ef, 'r') as f:
+                    meta = json.load(f)
+                    slot = meta.get("encoder_slot", "")
+                    title = meta.get("title", "").replace('_', ' ')
+                    if slot and title:
+                        slot_to_title[slot] = title
             except Exception:
                 pass
 
-        # Find all encoding lines and get the most recent one
-        encoder_matches = re.findall(
-            r'Encoding:.*?(\d+\.?\d*)\s*%.*?(\d+\.?\d*)\s*fps.*?ETA\s*(\d+h\d+m\d+s|\d+m\d+s)',
-            encoder_logs
-        )
-        if encoder_matches:
-            last_match = encoder_matches[-1]
-            progress["encoder"] = {
-                "percent": float(last_match[0]),
-                "speed": f"{last_match[1]} fps",
-                "eta": last_match[2],
-                "active_count": len(active_slots),
-                "titles": encoding_titles
-            }
-        elif encoding_titles:
-            # No progress yet but encoding is active
-            progress["encoder"] = {
-                "percent": 0,
-                "speed": "starting",
-                "eta": "calculating",
-                "active_count": len(active_slots),
-                "titles": encoding_titles
-            }
+        encoder_progress_list = []
+        for slot in active_slots:
+            # Read per-slot log file
+            slot_log_file = os.path.join(LOG_DIR, f"encoder-{slot}.log")
+            slot_logs = ""
+            if os.path.exists(slot_log_file):
+                try:
+                    with open(slot_log_file, 'r') as f:
+                        f.seek(0, 2)  # End of file
+                        size = f.tell()
+                        f.seek(max(0, size - 10240))  # Last 10KB
+                        slot_logs = f.read()
+                except Exception:
+                    pass
+
+            # Find encoding progress in this slot's log
+            encoder_matches = re.findall(
+                r'Encoding:.*?(\d+\.?\d*)\s*%.*?(\d+\.?\d*)\s*fps.*?ETA\s*(\d+h\d+m\d+s|\d+m\d+s)',
+                slot_logs
+            )
+
+            title = slot_to_title.get(slot, f"Slot {slot}")
+
+            if encoder_matches:
+                last_match = encoder_matches[-1]
+                encoder_progress_list.append({
+                    "slot": slot,
+                    "title": title,
+                    "percent": float(last_match[0]),
+                    "speed": f"{last_match[1]} fps",
+                    "eta": last_match[2]
+                })
+            else:
+                # Encoding active but no progress yet
+                encoder_progress_list.append({
+                    "slot": slot,
+                    "title": title,
+                    "percent": 0,
+                    "speed": "starting",
+                    "eta": "calculating"
+                })
+
+        if encoder_progress_list:
+            progress["encoder"] = encoder_progress_list  # Now a list!
 
     # Parse ddrescue ISO creation progress (per-device)
     # Pattern: "pct rescued:  XX.XX%, read errors:        0,  remaining time:         Xm"
@@ -2007,15 +2019,17 @@ DASHBOARD_HTML = """
                 {% endfor %}
                 {% endif %}
                 {% if progress.encoder %}
+                {% for enc in progress.encoder %}
                 <div class="progress-item">
                     <div class="progress-header">
-                        <span class="progress-label">Encoding{% if progress.encoder.active_count > 1 %} ({{ progress.encoder.active_count }} parallel){% endif %}{% if progress.encoder.titles %}: {{ progress.encoder.titles | join(', ') }}{% endif %}</span>
-                        <span class="progress-stats">{{ "%.1f"|format(progress.encoder.percent) }}% | {{ progress.encoder.speed }} | ETA: {{ progress.encoder.eta }}</span>
+                        <span class="progress-label">Encoding: {{ enc.title }}</span>
+                        <span class="progress-stats">{{ "%.1f"|format(enc.percent) }}% | {{ enc.speed }} | ETA: {{ enc.eta }}</span>
                     </div>
                     <div class="progress-bar">
-                        <div class="progress-fill progress-encoder" style="width: {{ progress.encoder.percent }}%"></div>
+                        <div class="progress-fill progress-encoder" style="width: {{ enc.percent }}%"></div>
                     </div>
                 </div>
+                {% endfor %}
                 {% endif %}
                 {% if progress.distributing %}
                 <div class="progress-item">
@@ -2166,24 +2180,19 @@ DASHBOARD_HTML = """
                     });
                 }
 
-                if (data.encoder) {
-                    let encoderLabel = 'Encoding';
-                    if (data.encoder.active_count > 1) {
-                        encoderLabel += ` (${data.encoder.active_count} parallel)`;
-                    }
-                    if (data.encoder.titles && data.encoder.titles.length > 0) {
-                        encoderLabel += ': ' + data.encoder.titles.join(', ');
-                    }
-                    html += `
-                        <div class="progress-item">
-                            <div class="progress-header">
-                                <span class="progress-label">${encoderLabel}</span>
-                                <span class="progress-stats">${data.encoder.percent.toFixed(1)}% | ${data.encoder.speed} | ETA: ${data.encoder.eta}</span>
-                            </div>
-                            <div class="progress-bar">
-                                <div class="progress-fill progress-encoder" style="width: ${data.encoder.percent}%"></div>
-                            </div>
-                        </div>`;
+                if (data.encoder && Array.isArray(data.encoder)) {
+                    data.encoder.forEach(enc => {
+                        html += `
+                            <div class="progress-item">
+                                <div class="progress-header">
+                                    <span class="progress-label">Encoding: ${enc.title}</span>
+                                    <span class="progress-stats">${enc.percent.toFixed(1)}% | ${enc.speed} | ETA: ${enc.eta}</span>
+                                </div>
+                                <div class="progress-bar">
+                                    <div class="progress-fill progress-encoder" style="width: ${enc.percent}%"></div>
+                                </div>
+                            </div>`;
+                    });
                 }
 
                 if (data.distributing) {
