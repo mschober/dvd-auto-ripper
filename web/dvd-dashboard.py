@@ -278,7 +278,12 @@ def get_active_progress():
     distributing_files = glob.glob(os.path.join(STAGING_DIR, "*.distributing"))
     is_distributing = len(distributing_files) > 0
 
-    # Only parse if something is actually running
+    # Check for receiving transfers (rsync temp files) early so we don't skip them
+    receiving = get_receiving_transfers()
+    if receiving:
+        progress["receiving"] = receiving
+
+    # Only parse logs if something is actually running (but still return receiving if found)
     if not any(s["active"] for s in locks.values()) and not is_distributing:
         return progress
 
@@ -411,11 +416,6 @@ def get_active_progress():
                 "speed": last_match[1],
                 "eta": last_match[2]
             }
-
-    # Detect incoming rsync transfers (receiving from cluster peers)
-    receiving = get_receiving_transfers()
-    if receiving:
-        progress["receiving"] = receiving
 
     return progress
 
