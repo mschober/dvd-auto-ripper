@@ -246,16 +246,27 @@ def get_active_progress():
     if not any(s["active"] for s in locks.values()) and not is_distributing:
         return progress
 
-    # Read more lines to catch progress updates
-    logs = get_recent_logs(200)
-
     # Parse HandBrake encoding progress
     # Pattern: "Encoding: task X of Y, XX.XX % (XX.XX fps, avg XX.XX fps, ETA XXhXXmXXs)"
     if locks.get("encoder", {}).get("active"):
+        # Read encoder log directly (not combined logs) to get progress
+        encoder_log = LOG_FILES.get("encoder", "")
+        encoder_logs = ""
+        if encoder_log and os.path.exists(encoder_log):
+            try:
+                with open(encoder_log, 'r') as f:
+                    # Read last 10KB for recent progress (HandBrake uses \r updates)
+                    f.seek(0, 2)  # End of file
+                    size = f.tell()
+                    f.seek(max(0, size - 10240))  # Last 10KB
+                    encoder_logs = f.read()
+            except Exception:
+                pass
+
         # Find all encoding lines and get the most recent one
         encoder_matches = re.findall(
             r'Encoding:.*?(\d+\.?\d*)\s*%.*?(\d+\.?\d*)\s*fps.*?ETA\s*(\d+h\d+m\d+s|\d+m\d+s)',
-            logs
+            encoder_logs
         )
         if encoder_matches:
             last_match = encoder_matches[-1]
@@ -312,9 +323,22 @@ def get_active_progress():
     # Parse rsync cluster distribution progress (during encoder lock with .distributing file)
     # Pattern: "XXX,XXX,XXX  XX%  XX.XXMB/s    X:XX:XX"
     if is_distributing:
+        # Read distribute log directly
+        dist_log = LOG_FILES.get("distribute", "")
+        dist_logs = ""
+        if dist_log and os.path.exists(dist_log):
+            try:
+                with open(dist_log, 'r') as f:
+                    f.seek(0, 2)
+                    size = f.tell()
+                    f.seek(max(0, size - 10240))
+                    dist_logs = f.read()
+            except Exception:
+                pass
+
         dist_matches = re.findall(
             r'(\d+)%\s+([\d.]+[KMG]?B/s)\s+(\d+:\d+:\d+)',
-            logs
+            dist_logs
         )
         if dist_matches:
             last_match = dist_matches[-1]
@@ -327,9 +351,22 @@ def get_active_progress():
     # Parse rsync transfer progress
     # Pattern: "XX% XX.XXMB/s X:XX:XX" or "XXX,XXX,XXX  XX%  XX.XXmB/s    X:XX:XX"
     if locks.get("transfer", {}).get("active"):
+        # Read transfer log directly
+        transfer_log = LOG_FILES.get("transfer", "")
+        transfer_logs = ""
+        if transfer_log and os.path.exists(transfer_log):
+            try:
+                with open(transfer_log, 'r') as f:
+                    f.seek(0, 2)
+                    size = f.tell()
+                    f.seek(max(0, size - 10240))
+                    transfer_logs = f.read()
+            except Exception:
+                pass
+
         transfer_matches = re.findall(
             r'(\d+)%\s+([\d.]+[KMG]?B/s)\s+(\d+:\d+:\d+)',
-            logs
+            transfer_logs
         )
         if transfer_matches:
             last_match = transfer_matches[-1]
