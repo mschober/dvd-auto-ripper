@@ -307,7 +307,20 @@ def get_active_progress():
 
     # Parse HandBrake encoding progress
     # Pattern: "Encoding: task X of Y, XX.XX % (XX.XX fps, avg XX.XX fps, ETA XXhXXmXXs)"
-    if locks.get("encoder", {}).get("active"):
+    encoder_status = locks.get("encoder", {})
+    encoder_slots = encoder_status.get("slots", {})
+    active_slots = [s for s, info in encoder_slots.items() if info.get("active")]
+
+    if encoder_status.get("active") and active_slots:
+        # Get list of movies currently encoding (from .encoding state files)
+        encoding_files = glob.glob(os.path.join(STAGING_DIR, "*.encoding"))
+        encoding_titles = []
+        for ef in encoding_files:
+            basename = os.path.basename(ef)
+            # Extract title: MOVIE_NAME-123456.encoding -> MOVIE_NAME
+            title_part = basename.rsplit('-', 1)[0] if '-' in basename else basename.replace('.encoding', '')
+            encoding_titles.append(title_part.replace('_', ' '))
+
         # Read encoder log directly (not combined logs) to get progress
         encoder_log = LOG_FILES.get("encoder", "")
         encoder_logs = ""
@@ -332,7 +345,18 @@ def get_active_progress():
             progress["encoder"] = {
                 "percent": float(last_match[0]),
                 "speed": f"{last_match[1]} fps",
-                "eta": last_match[2]
+                "eta": last_match[2],
+                "active_count": len(active_slots),
+                "titles": encoding_titles
+            }
+        elif encoding_titles:
+            # No progress yet but encoding is active
+            progress["encoder"] = {
+                "percent": 0,
+                "speed": "starting",
+                "eta": "calculating",
+                "active_count": len(active_slots),
+                "titles": encoding_titles
             }
 
     # Parse ddrescue ISO creation progress (per-device)
@@ -1985,7 +2009,7 @@ DASHBOARD_HTML = """
                 {% if progress.encoder %}
                 <div class="progress-item">
                     <div class="progress-header">
-                        <span class="progress-label">Encoding</span>
+                        <span class="progress-label">Encoding{% if progress.encoder.active_count > 1 %} ({{ progress.encoder.active_count }} parallel){% endif %}{% if progress.encoder.titles %}: {{ progress.encoder.titles | join(', ') }}{% endif %}</span>
                         <span class="progress-stats">{{ "%.1f"|format(progress.encoder.percent) }}% | {{ progress.encoder.speed }} | ETA: {{ progress.encoder.eta }}</span>
                     </div>
                     <div class="progress-bar">
@@ -2143,10 +2167,17 @@ DASHBOARD_HTML = """
                 }
 
                 if (data.encoder) {
+                    let encoderLabel = 'Encoding';
+                    if (data.encoder.active_count > 1) {
+                        encoderLabel += ` (${data.encoder.active_count} parallel)`;
+                    }
+                    if (data.encoder.titles && data.encoder.titles.length > 0) {
+                        encoderLabel += ': ' + data.encoder.titles.join(', ');
+                    }
                     html += `
                         <div class="progress-item">
                             <div class="progress-header">
-                                <span class="progress-label">Encoding</span>
+                                <span class="progress-label">${encoderLabel}</span>
                                 <span class="progress-stats">${data.encoder.percent.toFixed(1)}% | ${data.encoder.speed} | ETA: ${data.encoder.eta}</span>
                             </div>
                             <div class="progress-bar">
