@@ -45,7 +45,7 @@ is_gibberish_title() {
     local title="$1"
 
     for pattern in "${GIBBERISH_PATTERNS[@]}"; do
-        if echo "$title" | grep -qE "$pattern"; then
+        if echo "$title" | grep -qE -- "$pattern"; then
             return 0  # Matches gibberish pattern
         fi
     done
