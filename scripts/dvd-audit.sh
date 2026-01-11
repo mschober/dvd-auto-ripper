@@ -74,8 +74,8 @@ find_transferred_metadata() {
     return 1
 }
 
-# Check if source ISO exists for a given MKV
-# Returns: 0 if ISO exists, 1 if missing
+# Check if source ISO exists (locally or distributed to cluster)
+# Returns: 0 if ISO exists or was distributed, 1 if missing
 has_source_iso() {
     local title="$1"
     local transferred_file
@@ -88,8 +88,15 @@ has_source_iso() {
 
     local iso_path=$(parse_json_field "$(cat "$transferred_file")" "iso_path" 2>/dev/null || echo "")
 
+    # Check if ISO exists locally
     if [[ -n "$iso_path" ]] && [[ -f "$iso_path" ]]; then
-        return 0  # ISO exists
+        return 0  # ISO exists locally
+    fi
+
+    # Check if ISO was distributed to cluster (intentionally deleted locally)
+    local base_name=$(basename "$transferred_file" .transferred)
+    if ls "$STAGING_DIR"/${base_name}.distributed-to-* 1>/dev/null 2>&1; then
+        return 0  # ISO was distributed to another node
     fi
 
     return 1  # ISO missing
