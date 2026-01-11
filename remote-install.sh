@@ -576,6 +576,7 @@ install_scripts() {
     cp "$SCRIPT_DIR/scripts/dvd-encoder.sh" "$INSTALL_BIN/"
     cp "$SCRIPT_DIR/scripts/dvd-transfer.sh" "$INSTALL_BIN/"
     cp "$SCRIPT_DIR/scripts/dvd-distribute.sh" "$INSTALL_BIN/"
+    cp "$SCRIPT_DIR/scripts/dvd-audit.sh" "$INSTALL_BIN/"
 
     # Copy VERSION file for pipeline version tracking
     if [[ -f "$SCRIPT_DIR/scripts/VERSION" ]]; then
@@ -595,6 +596,7 @@ install_scripts() {
     chmod 755 "$INSTALL_BIN/dvd-encoder.sh"
     chmod 755 "$INSTALL_BIN/dvd-transfer.sh"
     chmod 755 "$INSTALL_BIN/dvd-distribute.sh"
+    chmod 755 "$INSTALL_BIN/dvd-audit.sh"
     chmod 644 "$INSTALL_BIN/dvd-utils.sh"
 
     print_info "✓ Scripts installed successfully"
@@ -602,6 +604,7 @@ install_scripts() {
     print_info "  - dvd-iso.sh (pipeline stage 1: ISO creation)"
     print_info "  - dvd-encoder.sh (pipeline stage 2: encoding)"
     print_info "  - dvd-distribute.sh (pipeline stage 2a: cluster distribution)"
+    print_info "  - dvd-audit.sh (hourly audit for suspicious MKVs)"
     print_info "  - dvd-transfer.sh (pipeline stage 3: NAS transfer)"
 }
 
@@ -832,6 +835,21 @@ install_pipeline_timers() {
         print_warn "dvd-distribute.timer not found, skipping"
     fi
 
+    # Install audit service and timer (detects suspicious MKVs)
+    if [[ -f "$SCRIPT_DIR/config/dvd-audit.service" ]]; then
+        cp "$SCRIPT_DIR/config/dvd-audit.service" "$systemd_dir/"
+        chmod 644 "$systemd_dir/dvd-audit.service"
+    else
+        print_warn "dvd-audit.service not found, skipping"
+    fi
+
+    if [[ -f "$SCRIPT_DIR/config/dvd-audit.timer" ]]; then
+        cp "$SCRIPT_DIR/config/dvd-audit.timer" "$systemd_dir/"
+        chmod 644 "$systemd_dir/dvd-audit.timer"
+    else
+        print_warn "dvd-audit.timer not found, skipping"
+    fi
+
     # Install udev control service (for pause/resume via dashboard)
     if [[ -f "$SCRIPT_DIR/config/dvd-udev-control@.service" ]]; then
         cp "$SCRIPT_DIR/config/dvd-udev-control@.service" "$systemd_dir/"
@@ -863,7 +881,13 @@ install_pipeline_timers() {
         print_info "✓ dvd-distribute.timer enabled and started"
     fi
 
-    print_info "✓ Pipeline timers installed (run every 15 minutes)"
+    if [[ -f "$systemd_dir/dvd-audit.timer" ]]; then
+        systemctl enable dvd-audit.timer
+        systemctl start dvd-audit.timer
+        print_info "✓ dvd-audit.timer enabled and started (runs hourly)"
+    fi
+
+    print_info "✓ Pipeline timers installed"
 }
 
 install_udev_rule() {

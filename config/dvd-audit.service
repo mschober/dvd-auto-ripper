@@ -1,0 +1,41 @@
+[Unit]
+Description=DVD Audit Service (detects suspicious MKVs)
+Documentation=https://github.com/mschober/dvd-auto-ripper
+After=network.target
+# Refuse to start if audit is already running
+ConditionPathExists=!/run/dvd-ripper/audit.lock
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/dvd-audit.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dvd-audit
+
+# User isolation - run as dvd-rip user (needs read access to Plex dir)
+User=dvd-rip
+Group=dvd-ripper
+SupplementaryGroups=plex
+
+# Runtime directory for lock files
+RuntimeDirectory=dvd-ripper
+RuntimeDirectoryMode=0775
+RuntimeDirectoryPreserve=yes
+
+# Resource limits - audit is lightweight
+CPUQuota=20%
+MemoryMax=256M
+TasksMax=8
+Nice=15
+
+# Short timeout - audit should complete quickly
+TimeoutStartSec=5min
+
+# Security hardening
+ProtectSystem=true
+ProtectHome=read-only
+NoNewPrivileges=yes
+PrivateDevices=true
+
+[Install]
+WantedBy=multi-user.target

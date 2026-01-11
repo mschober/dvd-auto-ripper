@@ -1675,6 +1675,22 @@ def is_generic_title(title):
     return False
 
 
+def get_audit_flags():
+    """Get audit flags for suspicious MKVs (created by dvd-audit.sh)."""
+    flags = []
+    pattern = os.path.join(STAGING_DIR, ".audit-*")
+    for audit_file in glob.glob(pattern):
+        try:
+            with open(audit_file, 'r') as f:
+                data = json.load(f)
+                data['audit_file'] = os.path.basename(audit_file)
+                data['mtime'] = os.path.getmtime(audit_file)
+                flags.append(data)
+        except (json.JSONDecodeError, IOError):
+            continue
+    return sorted(flags, key=lambda x: x.get('mtime', 0))
+
+
 def get_pending_identification():
     """Get items that need identification (generic names in renameable states)."""
     pending = []
@@ -2194,10 +2210,13 @@ DASHBOARD_HTML = """
             <a href="/status">Status</a> |
             <a href="/health">Health</a> |
             <a href="/cluster">Cluster</a> |
-            <a href="/identify">
-                Pending ID
+            <a href="/issues">
+                Issues
                 {% if pending_identification > 0 %}
                 <span style="background: #f59e0b; color: white; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: 600;">{{ pending_identification }}</span>
+                {% endif %}
+                {% if audit_flag_count > 0 %}
+                <span style="background: #dc2626; color: white; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: 600;" title="Audit flags">{{ audit_flag_count }}</span>
                 {% endif %}
             </a>
         </p>
@@ -3113,7 +3132,7 @@ IDENTIFY_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Pending Identification - DVD Ripper</title>
+    <title>Issues - DVD Ripper</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * { box-sizing: border-box; }
@@ -3238,6 +3257,56 @@ IDENTIFY_HTML = """
         }
         .empty-state h2 { color: #059669; margin-bottom: 8px; }
         .empty-state p { color: #6b7280; }
+        .audit-section {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 2px solid #e5e7eb;
+        }
+        .audit-section h2 {
+            margin: 0 0 16px 0;
+            color: #dc2626;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .audit-card {
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 12px;
+        }
+        .audit-title {
+            font-weight: 600;
+            font-size: 16px;
+            margin-bottom: 8px;
+        }
+        .audit-issues {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .audit-issue {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .issue-gibberish { background: #fef3c7; color: #92400e; }
+        .issue-small { background: #fee2e2; color: #991b1b; }
+        .issue-missing { background: #ddd6fe; color: #5b21b6; }
+        .audit-meta {
+            font-size: 12px;
+            color: #6b7280;
+        }
+        .btn-dismiss {
+            background: #e5e7eb;
+            color: #374151;
+            padding: 6px 12px;
+            margin-top: 8px;
+        }
+        .btn-dismiss:hover { background: #d1d5db; }
         .success-msg {
             background: #d1fae5;
             color: #065f46;
@@ -3264,10 +3333,12 @@ IDENTIFY_HTML = """
     </style>
 </head>
 <body>
-    <h1><a href="/">Dashboard</a> / Pending Identification</h1>
-    <p class="subtitle">These items have generic names and need proper titles for Plex. Watch the preview to identify each movie.</p>
+    <h1><a href="/">Dashboard</a> / Issues</h1>
+    <p class="subtitle">Items needing attention: generic names to identify, audit flags to review.</p>
 
     {% if pending %}
+    <h2 style="margin: 0 0 16px 0; color: #f59e0b;">Needs Identification</h2>
+    <p style="color: #666; margin-bottom: 16px;">These items have generic names. Watch the preview to identify each movie.</p>
     <div class="identify-grid">
         {% for item in pending %}
         <div class="identify-card" data-state-file="{{ item.state_file }}">
@@ -3319,11 +3390,13 @@ IDENTIFY_HTML = """
         {% endfor %}
     </div>
     {% else %}
+    {% if not audit_flags %}
     <div class="empty-state">
         <h2>All Clear!</h2>
-        <p>No items need identification. All your DVDs have proper names.</p>
+        <p>No issues found. All your DVDs have proper names and passed audit.</p>
         <p><a href="/">Return to Dashboard</a></p>
     </div>
+    {% endif %}
     {% endif %}
 
     <script>
@@ -3383,6 +3456,59 @@ IDENTIFY_HTML = """
         return false;
     }
     </script>
+
+    {% if audit_flags %}
+    <div class="audit-section">
+        <h2>Audit Flags</h2>
+        <p class="subtitle">These videos were flagged by the hourly audit for potential issues.</p>
+        {% for flag in audit_flags %}
+        <div class="audit-card" data-title="{{ flag.title }}">
+            <div class="audit-title">{{ flag.title }}</div>
+            <div class="audit-issues">
+                {% if 'gibberish' in flag.issues %}
+                <span class="audit-issue issue-gibberish">Suspicious Title</span>
+                {% endif %}
+                {% if 'small' in flag.issues %}
+                <span class="audit-issue issue-small">Small File ({{ flag.size_mb }}MB)</span>
+                {% endif %}
+                {% if 'missing' in flag.issues %}
+                <span class="audit-issue issue-missing">Missing Archive</span>
+                {% endif %}
+            </div>
+            <div class="audit-meta">
+                Flagged: {{ flag.flagged_at[:19] if flag.flagged_at else 'Unknown' }}
+                {% if flag.hostname %} | Host: {{ flag.hostname }}{% endif %}
+            </div>
+            <button class="btn btn-dismiss" onclick="dismissAuditFlag('{{ flag.title }}', this)">
+                Dismiss Flag
+            </button>
+        </div>
+        {% endfor %}
+    </div>
+    <script>
+    async function dismissAuditFlag(title, btn) {
+        btn.disabled = true;
+        btn.textContent = 'Dismissing...';
+        try {
+            const response = await fetch('/api/audit/clear/' + encodeURIComponent(title), {
+                method: 'POST'
+            });
+            if (response.ok) {
+                btn.closest('.audit-card').remove();
+            } else {
+                const result = await response.json();
+                alert('Failed: ' + (result.error || 'Unknown error'));
+                btn.disabled = false;
+                btn.textContent = 'Dismiss Flag';
+            }
+        } catch (e) {
+            alert('Request failed: ' + e.message);
+            btn.disabled = false;
+            btn.textContent = 'Dismiss Flag';
+        }
+    }
+    </script>
+    {% endif %}
 
     <div class="footer">
         Pipeline v{{ pipeline_version }} | Dashboard v{{ dashboard_version }} |
@@ -4706,6 +4832,7 @@ def dashboard():
         message=message,
         message_type=message_type,
         pending_identification=len(get_pending_identification()),
+        audit_flag_count=len(get_audit_flags()),
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
         github_url=GITHUB_URL,
@@ -4769,12 +4896,14 @@ def architecture_page():
     )
 
 
-@app.route("/identify")
-def identify_page():
-    """Pending identification page for generic-named movies."""
+@app.route("/issues")
+@app.route("/identify")  # Keep old route for backwards compatibility
+def issues_page():
+    """Issues page for items needing attention (identification, audit flags)."""
     return render_template_string(
         IDENTIFY_HTML,
         pending=get_pending_identification(),
+        audit_flags=get_audit_flags(),
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
         github_url=GITHUB_URL
@@ -5095,6 +5224,26 @@ def api_cancel_queue_item(state_file):
 def api_identify_pending():
     """API: Get items pending identification."""
     return jsonify(get_pending_identification())
+
+
+@app.route("/api/audit/flags")
+def api_audit_flags():
+    """API: Get audit flags for suspicious MKVs."""
+    return jsonify(get_audit_flags())
+
+
+@app.route("/api/audit/clear/<path:title>", methods=["POST"])
+def api_audit_clear(title):
+    """API: Clear an audit flag after issue is resolved."""
+    sanitized = title.replace(' ', '_')
+    audit_file = os.path.join(STAGING_DIR, f".audit-{sanitized}")
+    if os.path.exists(audit_file):
+        try:
+            os.remove(audit_file)
+            return jsonify({"status": "ok", "message": f"Cleared audit flag for {title}"})
+        except OSError as e:
+            return jsonify({"error": str(e)}), 500
+    return jsonify({"error": "Audit flag not found"}), 404
 
 
 @app.route("/api/identify/<path:state_file>/rename", methods=["POST"])

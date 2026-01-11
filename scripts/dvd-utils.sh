@@ -799,6 +799,7 @@ ISO_LOCK_FILE="${ISO_LOCK_FILE:-/run/dvd-ripper/iso.lock}"
 ENCODER_LOCK_FILE="${ENCODER_LOCK_FILE:-/run/dvd-ripper/encoder.lock}"
 TRANSFER_LOCK_FILE="${TRANSFER_LOCK_FILE:-/run/dvd-ripper/transfer.lock}"
 DISTRIBUTE_LOCK_FILE="${DISTRIBUTE_LOCK_FILE:-/run/dvd-ripper/distribute.lock}"
+AUDIT_LOCK_FILE="${AUDIT_LOCK_FILE:-/run/dvd-ripper/audit.lock}"
 
 # Acquire stage-specific lock (non-blocking)
 # Usage: acquire_stage_lock STAGE [DEVICE]
@@ -822,6 +823,7 @@ acquire_stage_lock() {
         encoder)    lock_file="$ENCODER_LOCK_FILE" ;;
         transfer)   lock_file="$TRANSFER_LOCK_FILE" ;;
         distribute) lock_file="$DISTRIBUTE_LOCK_FILE" ;;
+        audit)      lock_file="$AUDIT_LOCK_FILE" ;;
         *)
             log_error "Unknown stage: $stage"
             return 1
@@ -865,6 +867,7 @@ release_stage_lock() {
         encoder)    lock_file="$ENCODER_LOCK_FILE" ;;
         transfer)   lock_file="$TRANSFER_LOCK_FILE" ;;
         distribute) lock_file="$DISTRIBUTE_LOCK_FILE" ;;
+        audit)      lock_file="$AUDIT_LOCK_FILE" ;;
         *)          return ;;
     esac
 

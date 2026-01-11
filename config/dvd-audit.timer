@@ -1,0 +1,19 @@
+[Unit]
+Description=DVD Audit Timer (runs hourly)
+Documentation=https://github.com/mschober/dvd-auto-ripper
+
+[Timer]
+# Start 10 minutes after boot
+OnBootSec=10min
+
+# Run hourly
+OnCalendar=hourly
+
+# Add some randomness to avoid exact hour boundaries
+RandomizedDelaySec=5min
+
+# Persist timer across reboots
+Persistent=true
+
+[Install]
+WantedBy=timers.target
