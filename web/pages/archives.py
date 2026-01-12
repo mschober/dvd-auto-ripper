@@ -76,7 +76,13 @@ def get_iso_archives():
             "state_file": None,
             "state": None,
             "metadata": {},
-            "mtime": mtime
+            "mtime": mtime,
+            # Archive-related fields
+            "archiving": False,
+            "archived": False,
+            "compressed_size": 0,
+            "archive_path": "",
+            "archived_at": ""
         }
 
     # Associate metadata files with each archive
@@ -133,6 +139,30 @@ def get_iso_archives():
             except (json.JSONDecodeError, IOError):
                 pass
             break
+
+        # Check for archiving state (compression in progress)
+        archiving_file = os.path.join(STAGING_DIR, f"{prefix}.archiving")
+        if os.path.exists(archiving_file):
+            archive["archiving"] = True
+            try:
+                with open(archiving_file, 'r') as f:
+                    arch_meta = json.load(f)
+                archive["archiving_started"] = arch_meta.get("started_at", "")
+            except (json.JSONDecodeError, IOError):
+                pass
+
+        # Check for archived state (compression complete)
+        archived_file = os.path.join(STAGING_DIR, f"{prefix}.archived")
+        if os.path.exists(archived_file):
+            archive["archived"] = True
+            try:
+                with open(archived_file, 'r') as f:
+                    arch_meta = json.load(f)
+                archive["compressed_size"] = arch_meta.get("compressed_size_bytes", 0)
+                archive["archive_path"] = arch_meta.get("archive_path", "")
+                archive["archived_at"] = arch_meta.get("archived_at", "")
+            except (json.JSONDecodeError, IOError):
+                pass
 
     return sorted(archives.values(), key=lambda x: x["mtime"], reverse=True)
 
@@ -395,6 +425,23 @@ ARCHIVES_HTML = """
         .badge-transferring { background: #d1fae5; color: #065f46; }
         .badge-archiving { background: #e0e7ff; color: #4338ca; }
         .badge-archived { background: #d1fae5; color: #047857; }
+
+        .archive-cell { white-space: nowrap; }
+        .archive-info { display: flex; flex-direction: column; gap: 2px; }
+        .compression-ratio { font-size: 10px; color: #059669; }
+        .btn-archive {
+            background: #e0e7ff;
+            color: #4338ca;
+            padding: 4px 10px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .btn-archive:hover { background: #c7d2fe; }
+        .btn-archive:disabled { opacity: 0.5; cursor: not-allowed; }
 
         .transfer-progress {
             display: flex;
@@ -710,6 +757,7 @@ ARCHIVES_HTML = """
                             <th>Title</th>
                             <th>Size</th>
                             <th>State</th>
+                            <th>Archive</th>
                             <th>Files</th>
                             <th>Actions</th>
                         </tr>
@@ -740,14 +788,26 @@ ARCHIVES_HTML = """
                                         <div class="progress-bar-fill" style="width: 0%;"></div>
                                     </div>
                                 </div>
-                                {% elif archive.state == 'archiving' %}
-                                <span class="badge badge-archiving">archiving...</span>
-                                {% elif archive.state == 'archived' %}
-                                <span class="badge badge-archived">archived</span>
                                 {% elif archive.state %}
                                 <span class="badge badge-state">{{ archive.state }}</span>
                                 {% elif archive.deletable %}
                                 <span class="badge badge-deletable">deletable</span>
+                                {% else %}
+                                <span class="badge badge-none">-</span>
+                                {% endif %}
+                            </td>
+                            <td class="archive-cell">
+                                {% if archive.archiving %}
+                                <span class="badge badge-archiving">compressing...</span>
+                                {% elif archive.archived %}
+                                <div class="archive-info">
+                                    <span class="badge badge-archived">{{ format_size(archive.compressed_size) }}</span>
+                                    <small class="compression-ratio">{{ "%.0f"|format((1 - archive.compressed_size / archive.iso_size) * 100) if archive.iso_size > 0 else 0 }}% saved</small>
+                                </div>
+                                {% elif archive.deletable and archive.state not in ['encoding', 'transferring', 'distributing'] %}
+                                <button class="btn btn-archive" onclick="archiveNow('{{ archive.prefix }}')">
+                                    Archive Now
+                                </button>
                                 {% else %}
                                 <span class="badge badge-none">-</span>
                                 {% endif %}
@@ -901,6 +961,31 @@ ARCHIVES_HTML = """
                 }
             } catch (err) {
                 showNotification('Transfer request failed: ' + err.message, 'error');
+            }
+        }
+
+        async function archiveNow(prefix) {
+            const title = prefix.split('-')[0].replace(/_/g, ' ');
+            if (!confirm(`Start archiving "${title}"? This will compress the ISO for long-term storage.`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/archives/archive-now', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prefix })
+                });
+                const result = await response.json();
+
+                if (result.status === 'started') {
+                    showNotification(`Archiving started: ${title}`, 'success');
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    showNotification(result.error || 'Archive failed to start', 'error');
+                }
+            } catch (err) {
+                showNotification('Archive request failed: ' + err.message, 'error');
             }
         }
 
@@ -1272,4 +1357,62 @@ def api_archives_delete(prefix):
         "status": "deleted" if not errors else "partial",
         "deleted": deleted,
         "errors": errors
+    })
+
+
+@archives_bp.route("/api/archives/archive-now", methods=["POST"])
+def api_archives_archive_now():
+    """API: Trigger immediate ISO archival via systemd service.
+
+    Expected JSON:
+    {
+        "prefix": "The_Matrix-1703615234"
+    }
+    """
+    data = request.json or {}
+    prefix = data.get("prefix")
+
+    if not prefix:
+        return jsonify({"error": "Missing prefix"}), 400
+
+    # Verify archive exists and is eligible
+    archives = {a["prefix"]: a for a in get_iso_archives()}
+    if prefix not in archives:
+        return jsonify({"error": "Archive not found"}), 404
+
+    archive = archives[prefix]
+
+    # Check if already archiving or archived
+    if archive.get("archiving"):
+        return jsonify({"error": "Already archiving"}), 400
+    if archive.get("archived"):
+        return jsonify({"error": "Already archived"}), 400
+
+    # Must be deletable to archive
+    if not archive.get("deletable"):
+        return jsonify({"error": "ISO must be in deletable state to archive"}), 400
+
+    # Don't archive if actively processing
+    if archive["state"] in ["iso-creating", "encoding", "transferring", "distributing"]:
+        return jsonify({"error": f"Cannot archive: ISO is {archive['state']}"}), 400
+
+    # Trigger the archive service via systemctl
+    try:
+        result = subprocess.run(
+            ["systemctl", "start", "dvd-archive.service"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode != 0:
+            return jsonify({"error": f"Failed to start archive service: {result.stderr}"}), 500
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Timeout starting archive service"}), 500
+    except Exception as e:
+        return jsonify({"error": f"Failed to trigger archive: {e}"}), 500
+
+    return jsonify({
+        "status": "started",
+        "prefix": prefix,
+        "message": "Archive service triggered"
     })
