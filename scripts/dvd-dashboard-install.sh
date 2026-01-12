@@ -83,6 +83,16 @@ if [[ -d "$HELPERS_SOURCE" ]]; then
     chmod 644 "$INSTALL_BIN/helpers"/*.py
 fi
 
+# Install pages package if it exists (Flask blueprints)
+PAGES_SOURCE="$SOURCE_DIR/web/pages"
+if [[ -d "$PAGES_SOURCE" ]]; then
+    print_info "Installing pages package..."
+    mkdir -p "$INSTALL_BIN/pages"
+    cp -r "$PAGES_SOURCE"/* "$INSTALL_BIN/pages/"
+    chmod 755 "$INSTALL_BIN/pages"
+    chmod 644 "$INSTALL_BIN/pages"/*.py
+fi
+
 # Install systemd service if source exists
 if [[ -f "$SERVICE_SOURCE" ]]; then
     print_info "Installing systemd service..."
