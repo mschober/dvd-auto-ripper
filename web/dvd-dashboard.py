@@ -265,6 +265,10 @@ def get_lock_status():
     any_iso_active = any(d.get("active") for d in iso_drives.values())
     status["iso"] = {"active": any_iso_active, "pid": None, "drives": iso_drives}
 
+    # Check archive lock (single instance - CPU intensive)
+    archive_lock = os.path.join(LOCK_DIR, "archive.lock")
+    status["archive"] = check_lock_file(archive_lock)
+
     return status
 
 
@@ -590,6 +594,71 @@ def get_active_progress():
 
         if transfer_progress_list:
             progress["transfer"] = transfer_progress_list  # Now a list!
+
+    # Parse archive progress (xz compression)
+    archive_status = locks.get("archive", {})
+    if archive_status.get("active"):
+        archive_progress_list = []
+
+        # Find .archiving state files
+        archiving_files = glob.glob(os.path.join(STAGING_DIR, "*.archiving"))
+        for state_file in archiving_files:
+            try:
+                with open(state_file, 'r') as f:
+                    meta = json.load(f)
+
+                iso_path = meta.get("iso_path", "")
+                title = meta.get("title", "Unknown").replace('_', ' ')
+                iso_size = meta.get("iso_size_bytes", 0)
+                started_at = meta.get("started_at", "")
+
+                # Calculate progress from xz output file size
+                xz_path = f"{iso_path}.xz"
+                percent = 0
+                speed = "compressing"
+                eta = "calculating"
+
+                if os.path.exists(xz_path) and iso_size > 0:
+                    try:
+                        xz_size = os.path.getsize(xz_path)
+                        # xz typically achieves 40-60% compression, so estimate based on that
+                        # Max at 95% since we can't know exactly when it will finish
+                        estimated_final = iso_size * 0.5  # Assume 50% compression ratio
+                        percent = min(95, (xz_size / estimated_final) * 100)
+
+                        # Calculate elapsed time and estimate ETA
+                        if started_at:
+                            try:
+                                from datetime import datetime
+                                start_time = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+                                elapsed = (datetime.now(start_time.tzinfo) - start_time).total_seconds()
+                                if percent > 5 and elapsed > 60:
+                                    total_estimated = elapsed / (percent / 100)
+                                    remaining = total_estimated - elapsed
+                                    if remaining > 0:
+                                        hours = int(remaining // 3600)
+                                        minutes = int((remaining % 3600) // 60)
+                                        if hours > 0:
+                                            eta = f"{hours}h{minutes}m"
+                                        else:
+                                            eta = f"{minutes}m"
+                                    speed = f"{xz_size / 1024 / 1024 / elapsed:.1f} MB/s" if elapsed > 0 else "starting"
+                            except Exception:
+                                pass
+                    except OSError:
+                        pass
+
+                archive_progress_list.append({
+                    "title": title,
+                    "percent": round(percent, 1),
+                    "speed": speed,
+                    "eta": eta
+                })
+            except Exception:
+                pass
+
+        if archive_progress_list:
+            progress["archive"] = archive_progress_list
 
     return progress
 
@@ -2032,6 +2101,7 @@ DASHBOARD_HTML = """
         .progress-encoder { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
         .progress-distributing { background: linear-gradient(90deg, #ec4899, #f472b6); }
         .progress-transfer { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
+        .progress-archive { background: linear-gradient(90deg, #10b981, #059669); }
         .progress-receiving {
             background: linear-gradient(90deg, #10b981, #34d399);
             animation: pulse-receiving 2s ease-in-out infinite;
@@ -2191,6 +2261,19 @@ DASHBOARD_HTML = """
                 </div>
                 {% endfor %}
                 {% endif %}
+                {% if progress.archive %}
+                {% for arch in progress.archive %}
+                <div class="progress-item">
+                    <div class="progress-header">
+                        <span class="progress-label">Archiving: {{ arch.title }}</span>
+                        <span class="progress-stats">{{ "%.1f"|format(arch.percent) }}% | {{ arch.speed }} | ETA: {{ arch.eta }}</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill progress-archive" style="width: {{ arch.percent }}%"></div>
+                    </div>
+                </div>
+                {% endfor %}
+                {% endif %}
                 {% if progress.receiving %}
                 {% for recv in progress.receiving %}
                 <div class="progress-item">
@@ -2204,7 +2287,7 @@ DASHBOARD_HTML = """
                 </div>
                 {% endfor %}
                 {% endif %}
-                {% if not progress.iso and not progress.encoder and not progress.distributing and not progress.transfer and not progress.receiving %}
+                {% if not progress.iso and not progress.encoder and not progress.distributing and not progress.transfer and not progress.archive and not progress.receiving %}
                 <p style="color: #666; font-size: 13px; margin: 12px 0 0 0;">No active operations</p>
                 {% endif %}
             </div>
@@ -2365,6 +2448,21 @@ DASHBOARD_HTML = """
                     });
                 }
 
+                if (data.archive && Array.isArray(data.archive)) {
+                    data.archive.forEach(arch => {
+                        html += `
+                            <div class="progress-item">
+                                <div class="progress-header">
+                                    <span class="progress-label">Archiving: ${arch.title}</span>
+                                    <span class="progress-stats">${arch.percent.toFixed(1)}% | ${arch.speed} | ETA: ${arch.eta}</span>
+                                </div>
+                                <div class="progress-bar">
+                                    <div class="progress-fill progress-archive" style="width: ${arch.percent}%"></div>
+                                </div>
+                            </div>`;
+                    });
+                }
+
                 if (data.receiving && Array.isArray(data.receiving)) {
                     data.receiving.forEach(recv => {
                         const displayName = recv.filename.replace(/_/g, ' ');
@@ -2381,7 +2479,7 @@ DASHBOARD_HTML = """
                     });
                 }
 
-                if ((!data.iso || data.iso.length === 0) && !data.encoder && !data.distributing && !data.transfer && (!data.receiving || data.receiving.length === 0)) {
+                if ((!data.iso || data.iso.length === 0) && !data.encoder && !data.distributing && !data.transfer && (!data.archive || data.archive.length === 0) && (!data.receiving || data.receiving.length === 0)) {
                     html = '<p style="color: #666; font-size: 13px; margin: 12px 0 0 0;">No active operations</p>';
                 }
 
