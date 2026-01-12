@@ -1119,11 +1119,6 @@ def api_archives_transfer():
         "started": time.time()
     }
     try:
-        # Debug: write state_data to temp file for inspection
-        debug_file = os.path.join(STAGING_DIR, "transfer-debug.json")
-        with open(debug_file, 'w') as dbg:
-            json.dump(state_data, dbg, indent=2)
-
         with open(state_file, 'w') as f:
             json.dump(state_data, f)
             f.flush()
@@ -1157,8 +1152,7 @@ def api_archives_transfer():
         "status": "started",
         "prefix": prefix,
         "peer": peer_name,
-        "message": f"Transfer to {peer_name} started in background",
-        "debug_state_data": state_data  # DEBUG: see what was written
+        "message": f"Transfer to {peer_name} started in background"
     })
 
 
