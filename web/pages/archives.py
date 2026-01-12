@@ -3,11 +3,11 @@ import os
 import glob
 import json
 import shutil
-import subprocess
 from datetime import datetime
 from flask import Blueprint, jsonify, render_template_string, request
 
 from helpers.pipeline import STAGING_DIR, STATE_ORDER
+from helpers.cluster import rsync_files, rsync_directory, confirm_files_on_peer
 
 # Blueprint setup
 archives_bp = Blueprint('archives', __name__)
@@ -732,6 +732,11 @@ def api_archives():
 def api_archives_transfer():
     """API: Transfer an ISO archive to a peer node.
 
+    Performs synchronous transfer with confirmation:
+    1. rsync files to peer
+    2. Verify files arrived via API call to peer
+    3. Return success only when confirmed
+
     Expected JSON:
     {
         "prefix": "The_Matrix-1703615234",
@@ -760,7 +765,7 @@ def api_archives_transfer():
     parts = peer.split(":")
     if len(parts) < 3:
         return jsonify({"error": "Invalid peer format"}), 400
-    peer_name, peer_host = parts[0], parts[1]
+    peer_name, peer_host, peer_port = parts[0], parts[1], int(parts[2])
 
     # Get cluster config
     config = get_cluster_config_for_archives()
@@ -772,32 +777,48 @@ def api_archives_transfer():
     if archive["mapfile"]:
         files_to_transfer.append(archive["mapfile"])
 
-    # Start background rsync
     try:
-        remote_dest = f"{ssh_user}@{peer_host}:{remote_staging}/"
+        # Synchronous rsync - blocks until complete
+        result = rsync_files(files_to_transfer, peer_host, ssh_user, remote_staging)
 
-        # Transfer ISO and mapfile
-        cmd = ["rsync", "-avz", "--progress"] + files_to_transfer + [remote_dest]
+        if not result["success"]:
+            return jsonify({
+                "error": "Transfer failed",
+                "details": result["errors"]
+            }), 500
 
-        # Run in background
-        log_file = f"/var/log/dvd-ripper/archive-transfer-{prefix}.log"
-        with open(log_file, 'w') as log:
-            log.write(f"Transfer started: {datetime.now().isoformat()}\n")
-            log.write(f"Files: {files_to_transfer}\n")
-            log.write(f"Destination: {remote_dest}\n\n")
-            subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
+        transferred = result["transferred"]
 
-        # Transfer keys directory separately if exists (rsync -r for directory)
+        # Transfer keys directory if exists
         if archive["keys_dir"]:
-            keys_cmd = ["rsync", "-avz", "-r", archive["keys_dir"], remote_dest]
-            subprocess.Popen(keys_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            keys_result = rsync_directory(archive["keys_dir"], peer_host, ssh_user, remote_staging)
+            if keys_result["success"]:
+                transferred.extend(keys_result["transferred"])
+
+        # Confirm files arrived on peer
+        filenames_to_confirm = [os.path.basename(f) for f in files_to_transfer]
+        confirm = confirm_files_on_peer(peer_host, peer_port, filenames_to_confirm)
+
+        if not confirm["success"]:
+            return jsonify({
+                "error": "Transfer may have succeeded but confirmation failed",
+                "details": confirm["error"],
+                "transferred": transferred
+            }), 500
+
+        if confirm["missing"]:
+            return jsonify({
+                "error": "Some files did not arrive on peer",
+                "missing": confirm["missing"],
+                "confirmed": confirm["confirmed"]
+            }), 500
 
         return jsonify({
-            "status": "started",
+            "status": "completed",
             "prefix": prefix,
             "peer": peer_name,
-            "files": files_to_transfer,
-            "log_file": log_file
+            "transferred": transferred,
+            "confirmed": confirm["confirmed"]
         })
 
     except Exception as e:

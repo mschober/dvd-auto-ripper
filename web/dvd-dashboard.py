@@ -5778,6 +5778,49 @@ def api_job_complete():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/cluster/confirm-files", methods=["POST"])
+def api_confirm_files():
+    """API: Confirm that specified files exist in staging directory.
+
+    Used by peers to verify that transferred files arrived successfully.
+
+    Expected JSON:
+    {
+        "files": ["TITLE-TIMESTAMP.iso", "TITLE-TIMESTAMP.iso.mapfile", ...]
+    }
+
+    Returns:
+    {
+        "confirmed": ["files", "that", "exist"],
+        "missing": ["files", "that", "dont"]
+    }
+    """
+    data = request.json or {}
+    files = data.get("files", [])
+
+    if not isinstance(files, list):
+        return jsonify({"error": "files must be a list"}), 400
+
+    confirmed = []
+    missing = []
+
+    for filename in files:
+        # Security: only allow checking files in staging dir, no path traversal
+        if "/" in filename or "\\" in filename or ".." in filename:
+            continue
+
+        path = os.path.join(STAGING_DIR, filename)
+        if os.path.exists(path):
+            confirmed.append(filename)
+        else:
+            missing.append(filename)
+
+    return jsonify({
+        "confirmed": confirmed,
+        "missing": missing
+    })
+
+
 # ============================================================================
 # Main
 # ============================================================================
