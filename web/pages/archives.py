@@ -5,6 +5,8 @@ import json
 import shutil
 import socket
 import subprocess
+import threading
+import time
 from datetime import datetime
 from flask import Blueprint, jsonify, render_template_string, request
 
@@ -119,6 +121,20 @@ def get_iso_archives():
                 pass
             break
 
+        # Check for archive-transferring-to-* states (dashboard transfers in progress)
+        for transfer_file in glob.glob(os.path.join(STAGING_DIR, f"{prefix}.archive-transferring-to-*")):
+            archive["state_file"] = transfer_file
+            # Extract peer name from filename (prefix.archive-transferring-to-peername)
+            peer_name = os.path.basename(transfer_file).split('.archive-transferring-to-')[-1]
+            archive["state"] = "archive-transferring"
+            archive["transfer_peer"] = peer_name
+            try:
+                with open(transfer_file, 'r') as f:
+                    archive["metadata"] = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                pass
+            break
+
     return sorted(archives.values(), key=lambda x: x["mtime"], reverse=True)
 
 
@@ -153,6 +169,110 @@ def get_local_disk_usage():
         pass
     return {"mount": "N/A", "total": "N/A", "used": "N/A",
             "available": "N/A", "percent": "0", "percent_num": 0}
+
+
+def do_background_transfer(archive, peer_host, peer_port, peer_name, ssh_user, remote_staging, state_file):
+    """Background thread function to perform archive transfer.
+
+    This runs rsync, confirms files on peer, and cleans up source files on success.
+    Updates the state file with progress/errors.
+    """
+    prefix = archive["prefix"]
+    start_time = time.time()
+
+    try:
+        # Build file list
+        files_to_transfer = [archive["iso_path"]]
+        if archive.get("mapfile"):
+            files_to_transfer.append(archive["mapfile"])
+
+        # Transfer files via rsync
+        result = rsync_files(files_to_transfer, peer_host, ssh_user, remote_staging)
+
+        if not result["success"]:
+            # Update state file with error
+            with open(state_file, 'w') as f:
+                json.dump({
+                    "status": "failed",
+                    "peer": peer_name,
+                    "error": result["errors"],
+                    "started": start_time,
+                    "finished": time.time()
+                }, f)
+            return
+
+        transferred = result["transferred"]
+
+        # Transfer keys directory if exists
+        if archive.get("keys_dir"):
+            keys_result = rsync_directory(archive["keys_dir"], peer_host, ssh_user, remote_staging)
+            if keys_result["success"]:
+                transferred.extend(keys_result["transferred"])
+
+        # Confirm files arrived on peer
+        filenames_to_confirm = [os.path.basename(f) for f in files_to_transfer]
+        confirm = confirm_files_on_peer(peer_host, peer_port, filenames_to_confirm)
+
+        if not confirm["success"] or confirm["missing"]:
+            with open(state_file, 'w') as f:
+                json.dump({
+                    "status": "failed",
+                    "peer": peer_name,
+                    "error": confirm.get("error") or f"Missing files: {confirm['missing']}",
+                    "started": start_time,
+                    "finished": time.time()
+                }, f)
+            return
+
+        # Transfer confirmed - delete source files (move semantics)
+        deleted = []
+
+        if os.path.exists(archive["iso_path"]):
+            try:
+                os.remove(archive["iso_path"])
+                deleted.append(os.path.basename(archive["iso_path"]))
+            except OSError:
+                pass
+
+        if archive.get("mapfile") and os.path.exists(archive["mapfile"]):
+            try:
+                os.remove(archive["mapfile"])
+                deleted.append(os.path.basename(archive["mapfile"]))
+            except OSError:
+                pass
+
+        if archive.get("keys_dir") and os.path.exists(archive["keys_dir"]):
+            try:
+                shutil.rmtree(archive["keys_dir"])
+                deleted.append(os.path.basename(archive["keys_dir"]))
+            except OSError:
+                pass
+
+        # Delete old state file if any (not the transferring state file)
+        old_state = archive.get("state_file")
+        if old_state and old_state != state_file and os.path.exists(old_state):
+            try:
+                os.remove(old_state)
+            except OSError:
+                pass
+
+        # Remove the transferring state file on success
+        if os.path.exists(state_file):
+            os.remove(state_file)
+
+    except Exception as e:
+        # Update state file with error
+        try:
+            with open(state_file, 'w') as f:
+                json.dump({
+                    "status": "failed",
+                    "peer": peer_name,
+                    "error": str(e),
+                    "started": start_time,
+                    "finished": time.time()
+                }, f)
+        except:
+            pass
 
 
 def get_cluster_config_for_archives():
@@ -284,6 +404,32 @@ ARCHIVES_HTML = """
         .badge-state { background: #dbeafe; color: #1e40af; }
         .badge-deletable { background: #fef3c7; color: #92400e; }
         .badge-none { background: #f3f4f6; color: #6b7280; }
+        .badge-transferring { background: #d1fae5; color: #065f46; }
+
+        .transfer-progress {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .progress-bar-mini {
+            height: 4px;
+            background: #e5e7eb;
+            border-radius: 2px;
+            overflow: hidden;
+            width: 80px;
+        }
+        .progress-bar-mini .progress-bar-fill {
+            height: 100%;
+            background: #10b981;
+            transition: width 0.3s ease;
+        }
+        .progress-bar-mini.pulsing .progress-bar-fill {
+            animation: pulse-progress 1.5s ease-in-out infinite;
+        }
+        @keyframes pulse-progress {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
 
         .files-cell { font-size: 12px; color: #6b7280; }
         .files-cell span { margin-right: 8px; }
@@ -516,7 +662,14 @@ ARCHIVES_HTML = """
                             </td>
                             <td class="size-cell">{{ format_size(archive.iso_size) }}</td>
                             <td>
-                                {% if archive.state %}
+                                {% if archive.state == 'archive-transferring' %}
+                                <div class="transfer-progress">
+                                    <span class="badge badge-transferring">→ {{ archive.transfer_peer }}</span>
+                                    <div class="progress-bar-mini pulsing">
+                                        <div class="progress-bar-fill" style="width: 100%;"></div>
+                                    </div>
+                                </div>
+                                {% elif archive.state %}
                                 <span class="badge badge-state">{{ archive.state }}</span>
                                 {% elif archive.deletable %}
                                 <span class="badge badge-deletable">deletable</span>
@@ -533,7 +686,7 @@ ARCHIVES_HTML = """
                             <td class="actions-cell">
                                 <button class="btn btn-delete"
                                         onclick="deleteArchive('{{ archive.prefix }}')"
-                                        {% if archive.state in ['iso-creating', 'encoding', 'transferring', 'distributing'] %}
+                                        {% if archive.state in ['iso-creating', 'encoding', 'transferring', 'distributing', 'archive-transferring'] %}
                                         disabled title="Cannot delete: {{ archive.state }}"
                                         {% endif %}>
                                     Delete
@@ -661,9 +814,12 @@ ARCHIVES_HTML = """
                 });
                 const result = await response.json();
 
-                if (result.status === 'completed') {
+                if (result.status === 'started') {
+                    showNotification(`Transfer started: ${prefix} -> ${peerName}`, 'success');
+                    // Refresh to show progress
+                    setTimeout(() => location.reload(), 1000);
+                } else if (result.status === 'completed') {
                     showNotification(`Transfer complete: ${prefix} -> ${peerName}`, 'success');
-                    // Refresh after short delay
                     setTimeout(() => location.reload(), 2000);
                 } else {
                     showNotification(result.error || 'Transfer failed', 'error');
@@ -827,12 +983,13 @@ def api_archives():
 
 @archives_bp.route("/api/archives/transfer", methods=["POST"])
 def api_archives_transfer():
-    """API: Transfer an ISO archive to a peer node.
+    """API: Transfer an ISO archive to a peer node (async).
 
-    Performs synchronous transfer with confirmation:
-    1. rsync files to peer
-    2. Verify files arrived via API call to peer
-    3. Return success only when confirmed
+    Starts background transfer and returns immediately:
+    1. Creates state file to track transfer
+    2. Spawns background thread to rsync files
+    3. Returns status "started" immediately
+    4. Background thread confirms and cleans up on success
 
     Expected JSON:
     {
@@ -854,8 +1011,8 @@ def api_archives_transfer():
 
     archive = archives[prefix]
 
-    # Don't transfer if actively processing
-    if archive["state"] in ["iso-creating", "encoding", "transferring", "distributing"]:
+    # Don't transfer if actively processing or already transferring
+    if archive["state"] in ["iso-creating", "encoding", "transferring", "distributing", "archive-transferring"]:
         return jsonify({"error": f"Cannot transfer: archive is {archive['state']}"}), 400
 
     # Parse peer
@@ -869,95 +1026,35 @@ def api_archives_transfer():
     ssh_user = config["ssh_user"]
     remote_staging = config["remote_staging"]
 
-    # Build file list to transfer
-    files_to_transfer = [archive["iso_path"]]
-    if archive["mapfile"]:
-        files_to_transfer.append(archive["mapfile"])
-
+    # Create state file to track transfer
+    state_file = os.path.join(STAGING_DIR, f"{prefix}.archive-transferring-to-{peer_name}")
     try:
-        # Synchronous rsync - blocks until complete
-        result = rsync_files(files_to_transfer, peer_host, ssh_user, remote_staging)
+        with open(state_file, 'w') as f:
+            json.dump({
+                "status": "transferring",
+                "peer": peer_name,
+                "peer_host": peer_host,
+                "peer_port": peer_port,
+                "iso_size": archive["iso_size"],
+                "started": time.time()
+            }, f)
+    except OSError as e:
+        return jsonify({"error": f"Failed to create state file: {e}"}), 500
 
-        if not result["success"]:
-            return jsonify({
-                "error": "Transfer failed",
-                "details": result["errors"]
-            }), 500
+    # Start background transfer thread
+    thread = threading.Thread(
+        target=do_background_transfer,
+        args=(archive, peer_host, peer_port, peer_name, ssh_user, remote_staging, state_file),
+        daemon=True
+    )
+    thread.start()
 
-        transferred = result["transferred"]
-
-        # Transfer keys directory if exists
-        if archive["keys_dir"]:
-            keys_result = rsync_directory(archive["keys_dir"], peer_host, ssh_user, remote_staging)
-            if keys_result["success"]:
-                transferred.extend(keys_result["transferred"])
-
-        # Confirm files arrived on peer
-        filenames_to_confirm = [os.path.basename(f) for f in files_to_transfer]
-        confirm = confirm_files_on_peer(peer_host, peer_port, filenames_to_confirm)
-
-        if not confirm["success"]:
-            return jsonify({
-                "error": "Transfer may have succeeded but confirmation failed",
-                "details": confirm["error"],
-                "transferred": transferred
-            }), 500
-
-        if confirm["missing"]:
-            return jsonify({
-                "error": "Some files did not arrive on peer",
-                "missing": confirm["missing"],
-                "confirmed": confirm["confirmed"]
-            }), 500
-
-        # Transfer confirmed - delete source files (move semantics)
-        deleted = []
-        delete_errors = []
-
-        # Delete ISO file
-        if os.path.exists(archive["iso_path"]):
-            try:
-                os.remove(archive["iso_path"])
-                deleted.append(os.path.basename(archive["iso_path"]))
-            except OSError as e:
-                delete_errors.append(f"ISO: {e}")
-
-        # Delete mapfile
-        if archive["mapfile"] and os.path.exists(archive["mapfile"]):
-            try:
-                os.remove(archive["mapfile"])
-                deleted.append(os.path.basename(archive["mapfile"]))
-            except OSError as e:
-                delete_errors.append(f"Mapfile: {e}")
-
-        # Delete keys directory
-        if archive["keys_dir"] and os.path.exists(archive["keys_dir"]):
-            try:
-                shutil.rmtree(archive["keys_dir"])
-                deleted.append(os.path.basename(archive["keys_dir"]))
-            except OSError as e:
-                delete_errors.append(f"Keys: {e}")
-
-        # Delete state file (if any)
-        if archive["state_file"] and os.path.exists(archive["state_file"]):
-            try:
-                os.remove(archive["state_file"])
-                deleted.append(os.path.basename(archive["state_file"]))
-            except OSError as e:
-                delete_errors.append(f"State: {e}")
-
-        return jsonify({
-            "status": "completed",
-            "prefix": prefix,
-            "peer": peer_name,
-            "transferred": transferred,
-            "confirmed": confirm["confirmed"],
-            "deleted": deleted,
-            "delete_errors": delete_errors if delete_errors else None
-        })
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({
+        "status": "started",
+        "prefix": prefix,
+        "peer": peer_name,
+        "message": f"Transfer to {peer_name} started in background"
+    })
 
 
 @archives_bp.route("/api/archives/<prefix>", methods=["DELETE"])
@@ -970,7 +1067,7 @@ def api_archives_delete(prefix):
     archive = archives[prefix]
 
     # Safety check: don't delete if actively being processed
-    if archive["state"] in ["iso-creating", "encoding", "transferring", "distributing"]:
+    if archive["state"] in ["iso-creating", "encoding", "transferring", "distributing", "archive-transferring"]:
         return jsonify({"error": f"Cannot delete: archive is {archive['state']}"}), 400
 
     deleted = []

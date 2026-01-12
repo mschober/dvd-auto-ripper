@@ -13,7 +13,7 @@ from typing import List, Dict, Optional
 
 
 def rsync_files(files: List[str], peer_host: str, ssh_user: str,
-                remote_path: str, timeout: int = 600) -> Dict:
+                remote_path: str, timeout: int = 3600) -> Dict:
     """
     Synchronous rsync transfer to a peer node.
 
