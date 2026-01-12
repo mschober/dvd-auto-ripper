@@ -334,19 +334,34 @@ create_users() {
         print_info "✓ Created SSH directory: $distribute_ssh_dir"
     fi
 
-    # Create dvd-web user (Web dashboard)
+    # Create dvd-web user (Web dashboard - needs SSH for cluster transfers)
     if ! getent passwd dvd-web >/dev/null 2>&1; then
         useradd --system \
             --gid dvd-ripper \
-            --home-dir /nonexistent \
-            --no-create-home \
+            --home-dir /var/lib/dvd-web \
+            --create-home \
             --shell /usr/sbin/nologin \
             --comment "DVD Ripper - Web Dashboard" \
             dvd-web
         print_info "✓ Created user: dvd-web (group: dvd-ripper)"
     else
         usermod -g dvd-ripper dvd-web 2>/dev/null || true
+        # Ensure home directory exists (may have been /nonexistent before)
+        if [[ ! -d /var/lib/dvd-web ]]; then
+            mkdir -p /var/lib/dvd-web
+            chown dvd-web:dvd-ripper /var/lib/dvd-web
+            chmod 750 /var/lib/dvd-web
+        fi
         print_info "  User dvd-web already exists"
+    fi
+
+    # Create SSH directory for dvd-web (cluster archive transfers)
+    local web_ssh_dir="/var/lib/dvd-web/.ssh"
+    if [[ ! -d "$web_ssh_dir" ]]; then
+        mkdir -p "$web_ssh_dir"
+        chmod 700 "$web_ssh_dir"
+        chown dvd-web:dvd-ripper "$web_ssh_dir"
+        print_info "✓ Created SSH directory: $web_ssh_dir"
     fi
 
     print_info "✓ User setup complete"
@@ -406,11 +421,27 @@ setup_ssh_keys() {
     local distribute_ssh_dir="/var/lib/dvd-distribute/.ssh"
     local distribute_key_file="${distribute_ssh_dir}/id_ed25519"
 
+    # Ensure dvd-distribute has a login shell (needed to accept rsync connections from dashboard)
+    local distribute_shell=$(getent passwd dvd-distribute | cut -d: -f7)
+    if [[ "$distribute_shell" == "/usr/sbin/nologin" ]] || [[ "$distribute_shell" == "/bin/false" ]]; then
+        usermod -s /bin/bash dvd-distribute
+        print_info "✓ Set dvd-distribute shell to /bin/bash (required for dashboard rsync)"
+    fi
+
     # Ensure directory exists with correct permissions
     if [[ ! -d "$distribute_ssh_dir" ]]; then
         mkdir -p "$distribute_ssh_dir"
         chmod 700 "$distribute_ssh_dir"
         chown dvd-distribute:dvd-ripper "$distribute_ssh_dir"
+    fi
+
+    # Create authorized_keys if it doesn't exist (for receiving dashboard connections)
+    local distribute_auth_keys="${distribute_ssh_dir}/authorized_keys"
+    if [[ ! -f "$distribute_auth_keys" ]]; then
+        touch "$distribute_auth_keys"
+        chmod 600 "$distribute_auth_keys"
+        chown dvd-distribute:dvd-ripper "$distribute_auth_keys"
+        print_info "✓ Created authorized_keys for dvd-distribute"
     fi
 
     # Generate SSH key if it doesn't exist
@@ -421,6 +452,29 @@ setup_ssh_keys() {
         print_info "  (For cluster mode: run --setup-cluster-peer to exchange keys with peers)"
     else
         print_info "✓ SSH key already exists: $distribute_key_file"
+    fi
+
+    # Setup SSH key for dvd-web (dashboard cluster transfers)
+    print_info "Setting up SSH keys for dvd-web user..."
+
+    local web_ssh_dir="/var/lib/dvd-web/.ssh"
+    local web_key_file="${web_ssh_dir}/id_ed25519"
+
+    # Ensure directory exists with correct permissions
+    if [[ ! -d "$web_ssh_dir" ]]; then
+        mkdir -p "$web_ssh_dir"
+        chmod 700 "$web_ssh_dir"
+        chown dvd-web:dvd-ripper "$web_ssh_dir"
+    fi
+
+    # Generate SSH key if it doesn't exist
+    if [[ ! -f "$web_key_file" ]]; then
+        print_info "Generating SSH key for dvd-web user..."
+        sudo -u dvd-web ssh-keygen -t ed25519 -f "$web_key_file" -N "" -C "dvd-web@$(hostname)"
+        print_info "✓ SSH key generated: $web_key_file"
+        print_info "  (For cluster archive transfers via dashboard)"
+    else
+        print_info "✓ SSH key already exists: $web_key_file"
     fi
 }
 
@@ -468,14 +522,64 @@ setup_cluster_peer() {
     fi
 
     # Test connection
-    print_info "Testing connection..."
+    print_info "Testing dvd-distribute connection..."
     if sudo -u dvd-distribute ssh -o BatchMode=yes -o ConnectTimeout=10 "dvd-transfer@$peer_host" "echo 'SSH connection successful'"; then
-        print_info "✓ Cluster peer $peer_host configured successfully"
+        print_info "✓ dvd-distribute -> dvd-transfer@$peer_host configured successfully"
     else
         print_error "SSH connection test failed"
         print_warn "Check that dvd-transfer user on $peer_host has /bin/bash shell"
         return 1
     fi
+
+    # Setup dvd-web SSH access (for dashboard cluster transfers)
+    print_info "Setting up dvd-web SSH access to $peer_host..."
+
+    local web_ssh_dir="/var/lib/dvd-web/.ssh"
+    local web_key_file="${web_ssh_dir}/id_ed25519"
+    local web_known_hosts="${web_ssh_dir}/known_hosts"
+
+    # Verify dvd-web key exists
+    if [[ ! -f "$web_key_file" ]]; then
+        print_warn "dvd-web SSH key not found - skipping dashboard cluster setup"
+        print_warn "Run install again to generate the key"
+        return 0
+    fi
+
+    local web_pubkey=$(cat "${web_key_file}.pub")
+
+    # Add peer's host key to dvd-web's known_hosts
+    print_info "Adding $peer_host to dvd-web known_hosts..."
+    if ! sudo -u dvd-web ssh-keyscan -H "$peer_host" >> "$web_known_hosts" 2>/dev/null; then
+        print_warn "Could not scan host key for dvd-web (non-fatal)"
+    else
+        sort -u "$web_known_hosts" -o "$web_known_hosts"
+        chown dvd-web:dvd-ripper "$web_known_hosts"
+        print_info "✓ Added host key to dvd-web known_hosts"
+    fi
+
+    # Add dvd-web public key to peer's dvd-transfer authorized_keys
+    # (dashboard connects to peer using CLUSTER_SSH_USER, typically dvd-transfer)
+    print_info "Adding dvd-web public key to $peer_host dvd-transfer user..."
+    # shellcheck disable=SC2029
+    if ssh "$peer_user@$peer_host" "echo '$web_pubkey' | sudo tee -a /var/lib/dvd-transfer/.ssh/authorized_keys > /dev/null && sudo chown dvd-transfer:dvd-ripper /var/lib/dvd-transfer/.ssh/authorized_keys && sudo chmod 600 /var/lib/dvd-transfer/.ssh/authorized_keys"; then
+        print_info "✓ dvd-web public key added to $peer_host"
+    else
+        print_warn "Failed to add dvd-web key to $peer_host (non-fatal)"
+        print_warn "Dashboard archive transfers may not work"
+        print_warn "Manually add this key to $peer_host:/var/lib/dvd-transfer/.ssh/authorized_keys"
+        print_warn "$web_pubkey"
+    fi
+
+    # Test dvd-web connection
+    print_info "Testing dvd-web connection..."
+    if sudo -u dvd-web ssh -o BatchMode=yes -o ConnectTimeout=10 "dvd-transfer@$peer_host" "echo 'SSH connection successful'"; then
+        print_info "✓ dvd-web -> dvd-transfer@$peer_host configured successfully"
+    else
+        print_warn "dvd-web SSH connection test failed (non-fatal)"
+        print_warn "Dashboard archive transfers may not work"
+    fi
+
+    print_info "✓ Cluster peer $peer_host configured"
 }
 
 merge_config() {

@@ -5,11 +5,12 @@ import json
 import shutil
 import socket
 import subprocess
+import time
 from datetime import datetime
 from flask import Blueprint, jsonify, render_template_string, request
 
 from helpers.pipeline import STAGING_DIR, STATE_ORDER
-from helpers.cluster import rsync_files, rsync_directory, confirm_files_on_peer, call_peer_api
+from helpers.cluster import call_peer_api
 
 # Blueprint setup
 archives_bp = Blueprint('archives', __name__)
@@ -119,7 +120,70 @@ def get_iso_archives():
                 pass
             break
 
+        # Check for archive-transferring-to-* states (dashboard transfers in progress)
+        for transfer_file in glob.glob(os.path.join(STAGING_DIR, f"{prefix}.archive-transferring-to-*")):
+            archive["state_file"] = transfer_file
+            # Extract peer name from filename (prefix.archive-transferring-to-peername)
+            peer_name = os.path.basename(transfer_file).split('.archive-transferring-to-')[-1]
+            archive["state"] = "archive-transferring"
+            archive["transfer_peer"] = peer_name
+            try:
+                with open(transfer_file, 'r') as f:
+                    archive["metadata"] = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                pass
+            break
+
     return sorted(archives.values(), key=lambda x: x["mtime"], reverse=True)
+
+
+def get_receiving_transfers():
+    """Detect incoming rsync transfers by looking for temp files.
+
+    rsync creates temp files like .FILENAME.XXXXXX during transfer.
+    Returns list of receiving transfer dicts.
+    """
+    receiving = []
+
+    # Look for rsync temp files (hidden files with .iso. in the name)
+    for temp_file in glob.glob(os.path.join(STAGING_DIR, ".*")):
+        basename = os.path.basename(temp_file)
+
+        # rsync temp files look like: .TITLE-TIMESTAMP.iso.XXXXXX
+        if not basename.startswith('.') or '.iso.' not in basename:
+            continue
+
+        # Skip non-temp patterns
+        if basename.endswith('.mapfile') or basename.endswith('.keys'):
+            continue
+
+        # Extract the original filename (remove leading . and trailing random suffix)
+        # .FLAWLESS_US-1767986637.iso.EPkPJt -> FLAWLESS_US-1767986637.iso
+        parts = basename[1:].rsplit('.', 1)  # Remove leading dot, split on last dot
+        if len(parts) != 2:
+            continue
+
+        original_name = parts[0]  # e.g., FLAWLESS_US-1767986637.iso
+        if not original_name.endswith('.iso'):
+            continue
+
+        prefix = original_name.rsplit('.iso', 1)[0]
+
+        try:
+            current_size = os.path.getsize(temp_file)
+            mtime = os.path.getmtime(temp_file)
+        except OSError:
+            continue
+
+        receiving.append({
+            "prefix": prefix,
+            "title": prefix.rsplit('-', 1)[0].replace('_', ' '),
+            "temp_file": temp_file,
+            "current_size": current_size,
+            "mtime": mtime
+        })
+
+    return sorted(receiving, key=lambda x: x["mtime"], reverse=True)
 
 
 def format_size(size_bytes):
@@ -284,6 +348,78 @@ ARCHIVES_HTML = """
         .badge-state { background: #dbeafe; color: #1e40af; }
         .badge-deletable { background: #fef3c7; color: #92400e; }
         .badge-none { background: #f3f4f6; color: #6b7280; }
+        .badge-transferring { background: #d1fae5; color: #065f46; }
+
+        .transfer-progress {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .progress-bar-mini {
+            height: 4px;
+            background: #e5e7eb;
+            border-radius: 2px;
+            overflow: hidden;
+            width: 80px;
+        }
+        .progress-bar-mini .progress-bar-fill {
+            height: 100%;
+            background: #10b981;
+            transition: width 0.3s ease;
+        }
+        .progress-bar-mini.pulsing .progress-bar-fill {
+            animation: pulse-progress 1.5s ease-in-out infinite;
+        }
+        @keyframes pulse-progress {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Receiving transfers section */
+        .receiving-section {
+            background: #ecfdf5;
+            border: 1px solid #a7f3d0;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 20px;
+        }
+        .receiving-header {
+            font-size: 14px;
+            font-weight: 600;
+            color: #065f46;
+            margin: 0 0 12px 0;
+        }
+        .receiving-item {
+            background: white;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 8px;
+        }
+        .receiving-item:last-child {
+            margin-bottom: 0;
+        }
+        .receiving-title {
+            font-weight: 600;
+            color: #111827;
+            margin-bottom: 4px;
+        }
+        .receiving-info {
+            display: flex;
+            gap: 12px;
+            font-size: 12px;
+            color: #6b7280;
+            margin-bottom: 8px;
+        }
+        .receiving-status {
+            color: #059669;
+            font-weight: 500;
+        }
+        .transfer-percent {
+            font-size: 11px;
+            color: #059669;
+            font-weight: 600;
+            margin-left: 8px;
+        }
 
         .files-cell { font-size: 12px; color: #6b7280; }
         .files-cell span { margin-right: 8px; }
@@ -492,6 +628,25 @@ ARCHIVES_HTML = """
         <div class="main-content">
             <div class="card">
                 <h2>ISO Archives on {{ node_name or 'this node' }}</h2>
+
+                {% if receiving %}
+                <div class="receiving-section">
+                    <h3 class="receiving-header">📥 Receiving Transfers</h3>
+                    {% for recv in receiving %}
+                    <div class="receiving-item">
+                        <div class="receiving-title">{{ recv.title }}</div>
+                        <div class="receiving-info">
+                            <span class="receiving-size">{{ format_size(recv.current_size) }}</span>
+                            <span class="receiving-status">receiving...</span>
+                        </div>
+                        <div class="progress-bar-mini pulsing">
+                            <div class="progress-bar-fill" style="width: 100%;"></div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
                 {% if archives %}
                 <table>
                     <thead>
@@ -516,7 +671,20 @@ ARCHIVES_HTML = """
                             </td>
                             <td class="size-cell">{{ format_size(archive.iso_size) }}</td>
                             <td>
-                                {% if archive.state %}
+                                {% if archive.state == 'archive-transferring' %}
+                                <div class="transfer-progress"
+                                     data-prefix="{{ archive.prefix }}"
+                                     data-peer="{{ archive.transfer_peer }}"
+                                     data-peer-host="{{ archive.metadata.peer_host if archive.metadata else '' }}"
+                                     data-peer-port="{{ archive.metadata.peer_port if archive.metadata else '' }}"
+                                     data-iso-size="{{ archive.iso_size }}">
+                                    <span class="badge badge-transferring">→ {{ archive.transfer_peer }}</span>
+                                    <span class="transfer-percent"></span>
+                                    <div class="progress-bar-mini">
+                                        <div class="progress-bar-fill" style="width: 0%;"></div>
+                                    </div>
+                                </div>
+                                {% elif archive.state %}
                                 <span class="badge badge-state">{{ archive.state }}</span>
                                 {% elif archive.deletable %}
                                 <span class="badge badge-deletable">deletable</span>
@@ -533,7 +701,7 @@ ARCHIVES_HTML = """
                             <td class="actions-cell">
                                 <button class="btn btn-delete"
                                         onclick="deleteArchive('{{ archive.prefix }}')"
-                                        {% if archive.state in ['iso-creating', 'encoding', 'transferring', 'distributing'] %}
+                                        {% if archive.state in ['iso-creating', 'encoding', 'transferring', 'distributing', 'archive-transferring'] %}
                                         disabled title="Cannot delete: {{ archive.state }}"
                                         {% endif %}>
                                     Delete
@@ -663,7 +831,10 @@ ARCHIVES_HTML = """
 
                 if (result.status === 'started') {
                     showNotification(`Transfer started: ${prefix} -> ${peerName}`, 'success');
-                    // Refresh after short delay
+                    // Refresh to show progress
+                    setTimeout(() => location.reload(), 1000);
+                } else if (result.status === 'completed') {
+                    showNotification(`Transfer complete: ${prefix} -> ${peerName}`, 'success');
                     setTimeout(() => location.reload(), 2000);
                 } else {
                     showNotification(result.error || 'Transfer failed', 'error');
@@ -739,6 +910,51 @@ ARCHIVES_HTML = """
                 }, 1000);
             }
         }
+
+        // Poll transfer progress for archives being transferred
+        async function pollTransferProgress() {
+            const transfers = document.querySelectorAll('.transfer-progress[data-peer-host]');
+            if (transfers.length === 0) return;
+
+            for (const el of transfers) {
+                const prefix = el.dataset.prefix;
+                const peerHost = el.dataset.peerHost;
+                const peerPort = el.dataset.peerPort;
+                const isoSize = parseInt(el.dataset.isoSize) || 0;
+
+                if (!peerHost || !peerPort || !isoSize) continue;
+
+                try {
+                    const response = await fetch(`http://${peerHost}:${peerPort}/api/archives/receiving`);
+                    if (!response.ok) continue;
+
+                    const data = await response.json();
+                    const recv = data.receiving.find(r => r.prefix === prefix);
+
+                    if (recv) {
+                        const percent = Math.round((recv.current_size / isoSize) * 100);
+                        const percentEl = el.querySelector('.transfer-percent');
+                        const fillEl = el.querySelector('.progress-bar-fill');
+
+                        if (percentEl) percentEl.textContent = `${percent}%`;
+                        if (fillEl) fillEl.style.width = `${percent}%`;
+                    }
+                } catch (err) {
+                    // Silently ignore polling errors
+                }
+            }
+        }
+
+        // Poll every 3 seconds if there are active transfers
+        if (document.querySelectorAll('.transfer-progress[data-peer-host]').length > 0) {
+            pollTransferProgress();
+            setInterval(pollTransferProgress, 3000);
+        }
+
+        // Auto-refresh page every 30 seconds to detect completed transfers
+        if (document.querySelectorAll('.transfer-progress, .receiving-item').length > 0) {
+            setTimeout(() => location.reload(), 30000);
+        }
     </script>
 </body>
 </html>
@@ -781,6 +997,9 @@ def archives_page():
     # Calculate totals
     total_size = sum(a["iso_size"] for a in archives)
 
+    # Get receiving transfers (rsync in progress)
+    receiving = get_receiving_transfers()
+
     # Get version info (try to import from main dashboard)
     try:
         from dvd_dashboard import get_pipeline_version, DASHBOARD_VERSION, GITHUB_URL
@@ -795,6 +1014,7 @@ def archives_page():
     return render_template_string(
         ARCHIVES_HTML,
         archives=archives,
+        receiving=receiving,
         total_count=len(archives),
         total_size_gb=round(total_size / (1024**3), 2),
         disk_usage=disk_usage,
@@ -825,14 +1045,28 @@ def api_archives():
     })
 
 
+@archives_bp.route("/api/archives/receiving")
+def api_archives_receiving():
+    """API: Get receiving transfers (rsync temp files).
+
+    Used by source node to poll transfer progress.
+    """
+    receiving = get_receiving_transfers()
+    return jsonify({
+        "count": len(receiving),
+        "receiving": receiving
+    })
+
+
 @archives_bp.route("/api/archives/transfer", methods=["POST"])
 def api_archives_transfer():
-    """API: Transfer an ISO archive to a peer node.
+    """API: Transfer an ISO archive to a peer node (async subprocess).
 
-    Performs synchronous transfer with confirmation:
-    1. rsync files to peer
-    2. Verify files arrived via API call to peer
-    3. Return success only when confirmed
+    Starts background transfer subprocess and returns immediately:
+    1. Creates state file with all transfer parameters
+    2. Spawns archive_transfer.py subprocess (survives dashboard restart)
+    3. Returns status "started" immediately
+    4. Subprocess confirms and cleans up on success
 
     Expected JSON:
     {
@@ -854,8 +1088,8 @@ def api_archives_transfer():
 
     archive = archives[prefix]
 
-    # Don't transfer if actively processing
-    if archive["state"] in ["iso-creating", "encoding", "transferring", "distributing"]:
+    # Don't transfer if actively processing or already transferring
+    if archive["state"] in ["iso-creating", "encoding", "transferring", "distributing", "archive-transferring"]:
         return jsonify({"error": f"Cannot transfer: archive is {archive['state']}"}), 400
 
     # Parse peer
@@ -869,57 +1103,57 @@ def api_archives_transfer():
     ssh_user = config["ssh_user"]
     remote_staging = config["remote_staging"]
 
-    # Build file list to transfer
-    files_to_transfer = [archive["iso_path"]]
-    if archive["mapfile"]:
-        files_to_transfer.append(archive["mapfile"])
+    # Create state file with all parameters for subprocess
+    state_file = os.path.join(STAGING_DIR, f"{prefix}.archive-transferring-to-{peer_name}")
+    state_data = {
+        "status": "pending",
+        "peer": peer_name,
+        "peer_host": peer_host,
+        "peer_port": peer_port,
+        "iso_path": archive["iso_path"],
+        "mapfile": archive.get("mapfile"),
+        "keys_dir": archive.get("keys_dir"),
+        "iso_size": archive["iso_size"],
+        "ssh_user": ssh_user,
+        "remote_staging": remote_staging,
+        "started": time.time()
+    }
+    try:
+        with open(state_file, 'w') as f:
+            json.dump(state_data, f)
+            f.flush()
+            os.fsync(f.fileno())  # Ensure data is on disk before subprocess starts
+    except OSError as e:
+        return jsonify({"error": f"Failed to create state file: {e}"}), 500
+
+    # Spawn transfer worker as subprocess (survives dashboard restart)
+    worker_script = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..", "helpers", "archive_transfer.py"
+    )
+    worker_script = os.path.normpath(worker_script)
 
     try:
-        # Synchronous rsync - blocks until complete
-        result = rsync_files(files_to_transfer, peer_host, ssh_user, remote_staging)
-
-        if not result["success"]:
-            return jsonify({
-                "error": "Transfer failed",
-                "details": result["errors"]
-            }), 500
-
-        transferred = result["transferred"]
-
-        # Transfer keys directory if exists
-        if archive["keys_dir"]:
-            keys_result = rsync_directory(archive["keys_dir"], peer_host, ssh_user, remote_staging)
-            if keys_result["success"]:
-                transferred.extend(keys_result["transferred"])
-
-        # Confirm files arrived on peer
-        filenames_to_confirm = [os.path.basename(f) for f in files_to_transfer]
-        confirm = confirm_files_on_peer(peer_host, peer_port, filenames_to_confirm)
-
-        if not confirm["success"]:
-            return jsonify({
-                "error": "Transfer may have succeeded but confirmation failed",
-                "details": confirm["error"],
-                "transferred": transferred
-            }), 500
-
-        if confirm["missing"]:
-            return jsonify({
-                "error": "Some files did not arrive on peer",
-                "missing": confirm["missing"],
-                "confirmed": confirm["confirmed"]
-            }), 500
-
-        return jsonify({
-            "status": "completed",
-            "prefix": prefix,
-            "peer": peer_name,
-            "transferred": transferred,
-            "confirmed": confirm["confirmed"]
-        })
-
+        subprocess.Popen(
+            ["python3", worker_script, "--state-file", state_file],
+            start_new_session=True,  # Detach from dashboard process
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        # Clean up state file on spawn failure
+        try:
+            os.remove(state_file)
+        except OSError:
+            pass
+        return jsonify({"error": f"Failed to spawn transfer worker: {e}"}), 500
+
+    return jsonify({
+        "status": "started",
+        "prefix": prefix,
+        "peer": peer_name,
+        "message": f"Transfer to {peer_name} started in background"
+    })
 
 
 @archives_bp.route("/api/archives/<prefix>", methods=["DELETE"])
@@ -932,7 +1166,7 @@ def api_archives_delete(prefix):
     archive = archives[prefix]
 
     # Safety check: don't delete if actively being processed
-    if archive["state"] in ["iso-creating", "encoding", "transferring", "distributing"]:
+    if archive["state"] in ["iso-creating", "encoding", "transferring", "distributing", "archive-transferring"]:
         return jsonify({"error": f"Cannot delete: archive is {archive['state']}"}), 400
 
     deleted = []
