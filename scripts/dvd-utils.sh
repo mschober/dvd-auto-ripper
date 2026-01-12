@@ -53,6 +53,7 @@ get_stage_log_file() {
         encoder)    echo "$LOG_FILE_ENCODER" ;;
         transfer)   echo "$LOG_FILE_TRANSFER" ;;
         distribute) echo "$LOG_FILE_DISTRIBUTE" ;;
+        archive)    echo "$LOG_FILE_ARCHIVE" ;;
         *)          echo "$LOG_FILE_ISO" ;;  # Default to iso.log
     esac
 }
