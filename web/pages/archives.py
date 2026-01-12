@@ -3,6 +3,7 @@ import os
 import glob
 import json
 import shutil
+import socket
 import subprocess
 from datetime import datetime
 from flask import Blueprint, jsonify, render_template_string, request
@@ -222,7 +223,7 @@ ARCHIVES_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Archives - DVD Ripper</title>
+    <title>Archives | {{ hostname }}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * { box-sizing: border-box; }
@@ -374,9 +375,22 @@ ARCHIVES_HTML = """
         }
         .notification.success { background: #d1fae5; color: #065f46; }
         .notification.error { background: #fee2e2; color: #991b1b; }
+        .notification-close {
+            margin-left: 12px;
+            cursor: pointer;
+            opacity: 0.7;
+            font-weight: bold;
+        }
+        .notification-close:hover { opacity: 1; }
+        .notification.fade-out {
+            animation: fadeOut 0.5s ease forwards;
+        }
         @keyframes slideIn {
             from { transform: translateX(100%); opacity: 0; }
             to { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes fadeOut {
+            to { opacity: 0; transform: translateX(100%); }
         }
 
         /* Confirmation Modal */
@@ -714,9 +728,16 @@ ARCHIVES_HTML = """
         function showNotification(message, type) {
             const notif = document.createElement('div');
             notif.className = `notification ${type}`;
-            notif.textContent = message;
+            notif.innerHTML = message + '<span class="notification-close">✕</span>';
+            notif.querySelector('.notification-close').onclick = () => notif.remove();
             document.body.appendChild(notif);
-            setTimeout(() => notif.remove(), 4000);
+            // Success fades after 3s, errors stay until closed
+            if (type === 'success') {
+                setTimeout(() => {
+                    notif.classList.add('fade-out');
+                    setTimeout(() => notif.remove(), 500);
+                }, 3000);
+            }
         }
     </script>
 </body>
@@ -734,8 +755,9 @@ def archives_page():
     config = get_cluster_config_for_archives()
     archives = get_iso_archives()
 
-    # Get local disk usage
+    # Get local disk usage and hostname
     disk_usage = get_local_disk_usage()
+    hostname = socket.gethostname().split('.')[0]
 
     # Get peer status if clustered
     peers = []
@@ -776,6 +798,7 @@ def archives_page():
         total_count=len(archives),
         total_size_gb=round(total_size / (1024**3), 2),
         disk_usage=disk_usage,
+        hostname=hostname,
         cluster_enabled=config["cluster_enabled"],
         node_name=config["node_name"],
         peers=peers,

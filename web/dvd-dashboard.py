@@ -36,6 +36,7 @@ CONFIG_FILE = os.environ.get("CONFIG_FILE", "/etc/dvd-ripper.conf")
 PIPELINE_VERSION_FILE = os.environ.get("PIPELINE_VERSION_FILE", "/usr/local/bin/VERSION")
 DASHBOARD_VERSION = "1.9.0"
 GITHUB_URL = "https://github.com/mschober/dvd-auto-ripper"
+HOSTNAME = socket.gethostname().split('.')[0]
 
 LOCK_DIR = "/run/dvd-ripper"
 LOCK_FILES = {
@@ -1871,7 +1872,7 @@ DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>DVD Ripper Dashboard</title>
+    <title>Dashboard | {{ hostname }}</title>
     <meta http-equiv="refresh" content="30">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
@@ -2421,7 +2422,7 @@ ARCHITECTURE_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>DVD Ripper Architecture</title>
+    <title>Architecture | {{ hostname }}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         body {
@@ -2602,7 +2603,7 @@ LOGS_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>DVD Ripper Logs</title>
+    <title>Logs | {{ hostname }}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * { box-sizing: border-box; }
@@ -2672,7 +2673,7 @@ STAGE_LOG_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>{{ stage|title }} Log - DVD Ripper</title>
+    <title>{{ stage|title }} Log | {{ hostname }}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         body {
@@ -2730,7 +2731,7 @@ CONFIG_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Configuration - DVD Ripper</title>
+    <title>Configuration | {{ hostname }}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * { box-sizing: border-box; }
@@ -3135,7 +3136,7 @@ IDENTIFY_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Issues - DVD Ripper</title>
+    <title>Issues | {{ hostname }}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * { box-sizing: border-box; }
@@ -3525,7 +3526,7 @@ STATUS_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Service Status - DVD Ripper</title>
+    <title>Services | {{ hostname }}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta http-equiv="refresh" content="30">
     <style>
@@ -3772,7 +3773,7 @@ CLUSTER_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Cluster Status - DVD Ripper</title>
+    <title>Cluster | {{ hostname }}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * { box-sizing: border-box; }
@@ -4394,7 +4395,7 @@ HEALTH_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>System Health - DVD Ripper</title>
+    <title>Health | {{ hostname }}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * { box-sizing: border-box; }
@@ -4839,7 +4840,8 @@ def dashboard():
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
         github_url=GITHUB_URL,
-        cluster_enabled=cluster_config.get("cluster_enabled", False)
+        cluster_enabled=cluster_config.get("cluster_enabled", False),
+        hostname=HOSTNAME
     )
 
 
@@ -4853,7 +4855,8 @@ def logs_page():
         logs=logs,
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
-        github_url=GITHUB_URL
+        github_url=GITHUB_URL,
+        hostname=HOSTNAME
     )
 
 
@@ -4869,7 +4872,8 @@ def stage_log_page(stage):
         logs=get_stage_logs(stage, lines),
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
-        github_url=GITHUB_URL
+        github_url=GITHUB_URL,
+        hostname=HOSTNAME
     )
 
 
@@ -4884,7 +4888,8 @@ def config_page():
         dropdown_settings=DROPDOWN_SETTINGS,
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
-        github_url=GITHUB_URL
+        github_url=GITHUB_URL,
+        hostname=HOSTNAME
     )
 
 
@@ -4895,7 +4900,8 @@ def architecture_page():
         ARCHITECTURE_HTML,
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
-        github_url=GITHUB_URL
+        github_url=GITHUB_URL,
+        hostname=HOSTNAME
     )
 
 
@@ -4909,7 +4915,8 @@ def issues_page():
         audit_flags=get_audit_flags(),
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
-        github_url=GITHUB_URL
+        github_url=GITHUB_URL,
+        hostname=HOSTNAME
     )
 
 
@@ -4928,7 +4935,8 @@ def status_page():
         message_type=message_type,
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
-        github_url=GITHUB_URL
+        github_url=GITHUB_URL,
+        hostname=HOSTNAME
     )
 
 
@@ -4950,7 +4958,8 @@ def health_page():
         message_type=message_type,
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
-        github_url=GITHUB_URL
+        github_url=GITHUB_URL,
+        hostname=HOSTNAME
     )
 
 
