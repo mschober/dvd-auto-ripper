@@ -557,23 +557,23 @@ setup_cluster_peer() {
         print_info "✓ Added host key to dvd-web known_hosts"
     fi
 
-    # Add dvd-web public key to peer's dvd-distribute authorized_keys
-    # (dashboard connects to peer as dvd-distribute for archive transfers)
-    print_info "Adding dvd-web public key to $peer_host dvd-distribute user..."
+    # Add dvd-web public key to peer's dvd-transfer authorized_keys
+    # (dashboard connects to peer using CLUSTER_SSH_USER, typically dvd-transfer)
+    print_info "Adding dvd-web public key to $peer_host dvd-transfer user..."
     # shellcheck disable=SC2029
-    if ssh "$peer_user@$peer_host" "echo '$web_pubkey' | sudo tee -a /var/lib/dvd-distribute/.ssh/authorized_keys > /dev/null && sudo chown dvd-distribute:dvd-ripper /var/lib/dvd-distribute/.ssh/authorized_keys && sudo chmod 600 /var/lib/dvd-distribute/.ssh/authorized_keys"; then
+    if ssh "$peer_user@$peer_host" "echo '$web_pubkey' | sudo tee -a /var/lib/dvd-transfer/.ssh/authorized_keys > /dev/null && sudo chown dvd-transfer:dvd-ripper /var/lib/dvd-transfer/.ssh/authorized_keys && sudo chmod 600 /var/lib/dvd-transfer/.ssh/authorized_keys"; then
         print_info "✓ dvd-web public key added to $peer_host"
     else
         print_warn "Failed to add dvd-web key to $peer_host (non-fatal)"
         print_warn "Dashboard archive transfers may not work"
-        print_warn "Manually add this key to $peer_host:/var/lib/dvd-distribute/.ssh/authorized_keys"
+        print_warn "Manually add this key to $peer_host:/var/lib/dvd-transfer/.ssh/authorized_keys"
         print_warn "$web_pubkey"
     fi
 
     # Test dvd-web connection
     print_info "Testing dvd-web connection..."
-    if sudo -u dvd-web ssh -o BatchMode=yes -o ConnectTimeout=10 "dvd-distribute@$peer_host" "echo 'SSH connection successful'"; then
-        print_info "✓ dvd-web -> dvd-distribute@$peer_host configured successfully"
+    if sudo -u dvd-web ssh -o BatchMode=yes -o ConnectTimeout=10 "dvd-transfer@$peer_host" "echo 'SSH connection successful'"; then
+        print_info "✓ dvd-web -> dvd-transfer@$peer_host configured successfully"
     else
         print_warn "dvd-web SSH connection test failed (non-fatal)"
         print_warn "Dashboard archive transfers may not work"
