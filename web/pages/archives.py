@@ -1119,13 +1119,14 @@ def api_archives_transfer():
         "started": time.time()
     }
     try:
+        # Debug: write state_data to temp file for inspection
+        with open("/tmp/transfer-debug.json", 'w') as dbg:
+            json.dump(state_data, dbg, indent=2)
+
         with open(state_file, 'w') as f:
             json.dump(state_data, f)
             f.flush()
             os.fsync(f.fileno())  # Ensure data is on disk before subprocess starts
-        # Debug: verify what was written
-        import sys
-        print(f"DEBUG: Wrote state file with {len(state_data)} keys: {list(state_data.keys())}", file=sys.stderr)
     except OSError as e:
         return jsonify({"error": f"Failed to create state file: {e}"}), 500
 
