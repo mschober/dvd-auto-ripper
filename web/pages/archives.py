@@ -1105,23 +1105,27 @@ def api_archives_transfer():
 
     # Create state file with all parameters for subprocess
     state_file = os.path.join(STAGING_DIR, f"{prefix}.archive-transferring-to-{peer_name}")
+    state_data = {
+        "status": "pending",
+        "peer": peer_name,
+        "peer_host": peer_host,
+        "peer_port": peer_port,
+        "iso_path": archive["iso_path"],
+        "mapfile": archive.get("mapfile"),
+        "keys_dir": archive.get("keys_dir"),
+        "iso_size": archive["iso_size"],
+        "ssh_user": ssh_user,
+        "remote_staging": remote_staging,
+        "started": time.time()
+    }
     try:
         with open(state_file, 'w') as f:
-            json.dump({
-                "status": "pending",
-                "peer": peer_name,
-                "peer_host": peer_host,
-                "peer_port": peer_port,
-                "iso_path": archive["iso_path"],
-                "mapfile": archive.get("mapfile"),
-                "keys_dir": archive.get("keys_dir"),
-                "iso_size": archive["iso_size"],
-                "ssh_user": ssh_user,
-                "remote_staging": remote_staging,
-                "started": time.time()
-            }, f)
+            json.dump(state_data, f)
             f.flush()
             os.fsync(f.fileno())  # Ensure data is on disk before subprocess starts
+        # Debug: verify what was written
+        import sys
+        print(f"DEBUG: Wrote state file with {len(state_data)} keys: {list(state_data.keys())}", file=sys.stderr)
     except OSError as e:
         return jsonify({"error": f"Failed to create state file: {e}"}), 500
 
