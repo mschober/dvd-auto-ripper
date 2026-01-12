@@ -1157,7 +1157,8 @@ def api_archives_transfer():
         "status": "started",
         "prefix": prefix,
         "peer": peer_name,
-        "message": f"Transfer to {peer_name} started in background"
+        "message": f"Transfer to {peer_name} started in background",
+        "debug_state_data": state_data  # DEBUG: see what was written
     })
 
 
