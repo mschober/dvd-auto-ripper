@@ -129,7 +129,8 @@ def update_state(state_file: str, status: str, **kwargs):
     try:
         with open(state_file, 'r') as f:
             state = json.load(f)
-    except:
+    except Exception as e:
+        print(f"Warning: Could not read state file, starting fresh: {e}", file=sys.stderr)
         state = {}
 
     state["status"] = status
@@ -139,6 +140,8 @@ def update_state(state_file: str, status: str, **kwargs):
     try:
         with open(state_file, 'w') as f:
             json.dump(state, f)
+            f.flush()
+            os.fsync(f.fileno())
     except Exception as e:
         print(f"Failed to update state file: {e}", file=sys.stderr)
 

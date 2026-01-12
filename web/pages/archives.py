@@ -1120,6 +1120,8 @@ def api_archives_transfer():
                 "remote_staging": remote_staging,
                 "started": time.time()
             }, f)
+            f.flush()
+            os.fsync(f.fileno())  # Ensure data is on disk before subprocess starts
     except OSError as e:
         return jsonify({"error": f"Failed to create state file: {e}"}), 500
 
