@@ -47,9 +47,13 @@ def rsync_files(files: List[str], peer_host: str, ssh_user: str,
             "stdout": ""
         }
 
-    # Build rsync command
+    # Build rsync command with SSH options for non-interactive use
+    # Uses dvd-web SSH key (set up by remote-install.sh --setup-cluster-peer)
+    # BatchMode=yes: fail instead of prompting for password
+    identity_file = "/var/lib/dvd-web/.ssh/id_ed25519"
+    ssh_opts = f"ssh -i {identity_file} -o BatchMode=yes"
     remote_dest = f"{ssh_user}@{peer_host}:{remote_path}/"
-    cmd = ["rsync", "-avz", "--progress"] + existing_files + [remote_dest]
+    cmd = ["rsync", "-avz", "--progress", "-e", ssh_opts] + existing_files + [remote_dest]
 
     try:
         result = subprocess.run(
@@ -113,8 +117,12 @@ def rsync_directory(directory: str, peer_host: str, ssh_user: str,
             "stdout": ""
         }
 
+    # SSH options for non-interactive use
+    # Uses dvd-web SSH key (set up by remote-install.sh --setup-cluster-peer)
+    identity_file = "/var/lib/dvd-web/.ssh/id_ed25519"
+    ssh_opts = f"ssh -i {identity_file} -o BatchMode=yes"
     remote_dest = f"{ssh_user}@{peer_host}:{remote_path}/"
-    cmd = ["rsync", "-avz", "-r", directory, remote_dest]
+    cmd = ["rsync", "-avz", "-r", "-e", ssh_opts, directory, remote_dest]
 
     try:
         result = subprocess.run(
