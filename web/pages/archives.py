@@ -138,6 +138,55 @@ def get_iso_archives():
     return sorted(archives.values(), key=lambda x: x["mtime"], reverse=True)
 
 
+def get_receiving_transfers():
+    """Detect incoming rsync transfers by looking for temp files.
+
+    rsync creates temp files like .FILENAME.XXXXXX during transfer.
+    Returns list of receiving transfer dicts.
+    """
+    receiving = []
+
+    # Look for rsync temp files (hidden files with .iso. in the name)
+    for temp_file in glob.glob(os.path.join(STAGING_DIR, ".*")):
+        basename = os.path.basename(temp_file)
+
+        # rsync temp files look like: .TITLE-TIMESTAMP.iso.XXXXXX
+        if not basename.startswith('.') or '.iso.' not in basename:
+            continue
+
+        # Skip non-temp patterns
+        if basename.endswith('.mapfile') or basename.endswith('.keys'):
+            continue
+
+        # Extract the original filename (remove leading . and trailing random suffix)
+        # .FLAWLESS_US-1767986637.iso.EPkPJt -> FLAWLESS_US-1767986637.iso
+        parts = basename[1:].rsplit('.', 1)  # Remove leading dot, split on last dot
+        if len(parts) != 2:
+            continue
+
+        original_name = parts[0]  # e.g., FLAWLESS_US-1767986637.iso
+        if not original_name.endswith('.iso'):
+            continue
+
+        prefix = original_name.rsplit('.iso', 1)[0]
+
+        try:
+            current_size = os.path.getsize(temp_file)
+            mtime = os.path.getmtime(temp_file)
+        except OSError:
+            continue
+
+        receiving.append({
+            "prefix": prefix,
+            "title": prefix.rsplit('-', 1)[0].replace('_', ' '),
+            "temp_file": temp_file,
+            "current_size": current_size,
+            "mtime": mtime
+        })
+
+    return sorted(receiving, key=lambda x: x["mtime"], reverse=True)
+
+
 def format_size(size_bytes):
     """Format bytes as human-readable string."""
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
@@ -431,6 +480,46 @@ ARCHIVES_HTML = """
             50% { opacity: 0.5; }
         }
 
+        /* Receiving transfers section */
+        .receiving-section {
+            background: #ecfdf5;
+            border: 1px solid #a7f3d0;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 20px;
+        }
+        .receiving-header {
+            font-size: 14px;
+            font-weight: 600;
+            color: #065f46;
+            margin: 0 0 12px 0;
+        }
+        .receiving-item {
+            background: white;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 8px;
+        }
+        .receiving-item:last-child {
+            margin-bottom: 0;
+        }
+        .receiving-title {
+            font-weight: 600;
+            color: #111827;
+            margin-bottom: 4px;
+        }
+        .receiving-info {
+            display: flex;
+            gap: 12px;
+            font-size: 12px;
+            color: #6b7280;
+            margin-bottom: 8px;
+        }
+        .receiving-status {
+            color: #059669;
+            font-weight: 500;
+        }
+
         .files-cell { font-size: 12px; color: #6b7280; }
         .files-cell span { margin-right: 8px; }
         .file-present { color: #059669; }
@@ -638,6 +727,25 @@ ARCHIVES_HTML = """
         <div class="main-content">
             <div class="card">
                 <h2>ISO Archives on {{ node_name or 'this node' }}</h2>
+
+                {% if receiving %}
+                <div class="receiving-section">
+                    <h3 class="receiving-header">📥 Receiving Transfers</h3>
+                    {% for recv in receiving %}
+                    <div class="receiving-item">
+                        <div class="receiving-title">{{ recv.title }}</div>
+                        <div class="receiving-info">
+                            <span class="receiving-size">{{ format_size(recv.current_size) }}</span>
+                            <span class="receiving-status">receiving...</span>
+                        </div>
+                        <div class="progress-bar-mini pulsing">
+                            <div class="progress-bar-fill" style="width: 100%;"></div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
                 {% if archives %}
                 <table>
                     <thead>
@@ -937,6 +1045,9 @@ def archives_page():
     # Calculate totals
     total_size = sum(a["iso_size"] for a in archives)
 
+    # Get receiving transfers (rsync in progress)
+    receiving = get_receiving_transfers()
+
     # Get version info (try to import from main dashboard)
     try:
         from dvd_dashboard import get_pipeline_version, DASHBOARD_VERSION, GITHUB_URL
@@ -951,6 +1062,7 @@ def archives_page():
     return render_template_string(
         ARCHIVES_HTML,
         archives=archives,
+        receiving=receiving,
         total_count=len(archives),
         total_size_gb=round(total_size / (1024**3), 2),
         disk_usage=disk_usage,
