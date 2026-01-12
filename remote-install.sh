@@ -187,7 +187,7 @@ check_dependencies() {
 
     print_info "Checking dependencies..."
 
-    # Required dependencies
+    # Required dependencies (command -> package name mapping for auto-install)
     local deps=("HandBrakeCLI" "rsync" "ssh" "eject" "ffmpeg" "ddrescue" "python3" "curl" "jq" "xz" "par2")
 
     for cmd in "${deps[@]}"; do
@@ -195,6 +195,60 @@ check_dependencies() {
             missing_deps+=("$cmd")
         fi
     done
+
+    # Try to auto-install missing archive dependencies (xz, par2)
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+        local can_auto_install=()
+        local cannot_auto_install=()
+
+        for dep in "${missing_deps[@]}"; do
+            case "$dep" in
+                xz|par2)
+                    can_auto_install+=("$dep")
+                    ;;
+                *)
+                    cannot_auto_install+=("$dep")
+                    ;;
+            esac
+        done
+
+        # Auto-install xz-utils and par2 if missing
+        if [[ ${#can_auto_install[@]} -gt 0 ]]; then
+            print_info "Auto-installing archive dependencies: ${can_auto_install[*]}"
+            if [[ -f /etc/debian_version ]]; then
+                apt-get update -qq
+                for dep in "${can_auto_install[@]}"; do
+                    case "$dep" in
+                        xz)
+                            apt-get install -y xz-utils >/dev/null 2>&1 && print_info "✓ Installed xz-utils" || print_warn "Failed to install xz-utils"
+                            ;;
+                        par2)
+                            apt-get install -y par2 >/dev/null 2>&1 && print_info "✓ Installed par2" || print_warn "Failed to install par2"
+                            ;;
+                    esac
+                done
+            elif [[ -f /etc/redhat-release ]]; then
+                for dep in "${can_auto_install[@]}"; do
+                    case "$dep" in
+                        xz)
+                            yum install -y xz >/dev/null 2>&1 && print_info "✓ Installed xz" || print_warn "Failed to install xz"
+                            ;;
+                        par2)
+                            yum install -y par2cmdline >/dev/null 2>&1 && print_info "✓ Installed par2cmdline" || print_warn "Failed to install par2cmdline"
+                            ;;
+                    esac
+                done
+            fi
+        fi
+
+        # Re-check after auto-install
+        missing_deps=()
+        for cmd in "${deps[@]}"; do
+            if ! command -v "$cmd" &>/dev/null; then
+                missing_deps+=("$cmd")
+            fi
+        done
+    fi
 
     if [[ ${#missing_deps[@]} -gt 0 ]]; then
         print_error "Missing required dependencies: ${missing_deps[*]}"
