@@ -333,6 +333,64 @@ ARCHIVES_HTML = """
             to { transform: translateX(0); opacity: 1; }
         }
 
+        /* Confirmation Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 2000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            max-width: 400px;
+            width: 90%;
+            box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04);
+        }
+        .modal h3 {
+            margin: 0 0 8px 0;
+            font-size: 18px;
+            color: #dc2626;
+        }
+        .modal p {
+            margin: 0 0 20px 0;
+            color: #4b5563;
+            font-size: 14px;
+        }
+        .modal-buttons {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+        }
+        .modal-btn {
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s;
+        }
+        .modal-btn-cancel {
+            background: #f3f4f6;
+            color: #374151;
+        }
+        .modal-btn-cancel:hover { background: #e5e7eb; }
+        .modal-btn-cancel:focus {
+            outline: 2px solid #3b82f6;
+            outline-offset: 2px;
+        }
+        .modal-btn-danger {
+            background: #dc2626;
+            color: white;
+        }
+        .modal-btn-danger:hover { background: #b91c1c; }
+
         .footer {
             margin-top: 20px;
             font-size: 12px;
@@ -457,6 +515,18 @@ ARCHIVES_HTML = """
         {% endif %}
     </div>
 
+    <!-- Delete Confirmation Modal -->
+    <div class="modal-overlay" id="deleteModal">
+        <div class="modal">
+            <h3>Delete Archive?</h3>
+            <p id="deleteModalText">Are you sure you want to delete this archive and all associated files? This cannot be undone.</p>
+            <div class="modal-buttons">
+                <button class="modal-btn modal-btn-cancel" id="deleteModalNo" autofocus>No, Keep It</button>
+                <button class="modal-btn modal-btn-danger" id="deleteModalYes">Yes, Delete</button>
+            </div>
+        </div>
+    </div>
+
     <div class="footer">
         Pipeline v{{ pipeline_version }} | Dashboard v{{ dashboard_version }} |
         <a href="{{ github_url }}" target="_blank">dvd-auto-ripper</a> |
@@ -526,8 +596,27 @@ ARCHIVES_HTML = """
             }
         }
 
-        async function deleteArchive(prefix) {
-            if (!confirm(`Delete archive ${prefix} and all associated files?`)) return;
+        let pendingDeletePrefix = null;
+
+        function deleteArchive(prefix) {
+            pendingDeletePrefix = prefix;
+            const title = prefix.split('-')[0].replace(/_/g, ' ');
+            document.getElementById('deleteModalText').textContent =
+                `Are you sure you want to delete "${title}" and all associated files? This cannot be undone.`;
+            document.getElementById('deleteModal').classList.add('active');
+            // Focus the No button (default safe action)
+            setTimeout(() => document.getElementById('deleteModalNo').focus(), 50);
+        }
+
+        function closeDeleteModal() {
+            document.getElementById('deleteModal').classList.remove('active');
+            pendingDeletePrefix = null;
+        }
+
+        async function confirmDelete() {
+            if (!pendingDeletePrefix) return;
+            const prefix = pendingDeletePrefix;
+            closeDeleteModal();
 
             try {
                 const response = await fetch(`/api/archives/${encodeURIComponent(prefix)}`, {
@@ -545,6 +634,19 @@ ARCHIVES_HTML = """
                 showNotification('Delete request failed: ' + err.message, 'error');
             }
         }
+
+        // Modal event listeners
+        document.getElementById('deleteModalNo').addEventListener('click', closeDeleteModal);
+        document.getElementById('deleteModalYes').addEventListener('click', confirmDelete);
+        document.getElementById('deleteModal').addEventListener('click', (e) => {
+            if (e.target.id === 'deleteModal') closeDeleteModal();
+        });
+        // Close on Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && document.getElementById('deleteModal').classList.contains('active')) {
+                closeDeleteModal();
+            }
+        });
 
         function showNotification(message, type) {
             const notif = document.createElement('div');
