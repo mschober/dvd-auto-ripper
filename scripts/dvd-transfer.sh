@@ -277,7 +277,8 @@ transfer_video() {
 
     if [[ "$transfer_success" == "true" ]]; then
         # Cleanup ISO.deletable if configured and exists
-        if [[ "$CLEANUP_ISO_AFTER_TRANSFER" == "1" ]]; then
+        # Skip if archival is enabled - let the archive process handle ISO deletion
+        if [[ "$CLEANUP_ISO_AFTER_TRANSFER" == "1" ]] && [[ "${ENABLE_ISO_ARCHIVAL:-0}" != "1" ]]; then
             local iso_deletable="${iso_path}.deletable"
             if [[ -f "$iso_deletable" ]]; then
                 log_info "[TRANSFER] Removing ISO: $iso_deletable"
@@ -288,6 +289,8 @@ transfer_video() {
                 log_info "[TRANSFER] Removing ISO: $iso_path"
                 rm -f "$iso_path"
             fi
+        elif [[ "${ENABLE_ISO_ARCHIVAL:-0}" == "1" ]]; then
+            log_debug "[TRANSFER] ISO cleanup skipped - archival enabled"
         fi
 
         # Cleanup preview if configured (keep by default for identification)
