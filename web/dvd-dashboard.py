@@ -18,8 +18,10 @@ from helpers.pipeline import (
     get_queue_items, count_by_state,
     STAGING_DIR, STATE_ORDER, QUEUE_ITEMS_PER_PAGE
 )
+from pages.archives import archives_bp
 
 app = Flask(__name__)
+app.register_blueprint(archives_bp)
 
 # Configuration - can be overridden via environment variables
 # Note: STAGING_DIR and STATE_ORDER are imported from helpers.pipeline
@@ -2210,6 +2212,7 @@ DASHBOARD_HTML = """
             <a href="/status">Status</a> |
             <a href="/health">Health</a> |
             <a href="/cluster">Cluster</a> |
+            <a href="/archives">Archives</a> |
             <a href="/issues">
                 Issues
                 {% if pending_identification > 0 %}
