@@ -1652,40 +1652,35 @@ generate_recovery_files() {
 }
 
 # Find ISOs that are ready for archiving
-# Archivable ISOs are marked .deletable and don't have .archived state
+# Archivable ISOs are renamed to .iso.deletable (the file IS the ISO)
 # Usage: find_archivable_isos
-# Returns: list of ISO paths (one per line)
+# Returns: list of ISO paths (one per line) - returns the .deletable file path
 find_archivable_isos() {
     local staging_dir="${STAGING_DIR:-/var/tmp/dvd-rips}"
 
-    # Find .deletable files
-    find "$staging_dir" -maxdepth 1 -name "*.deletable" -type f 2>/dev/null | while read -r deletable_file; do
-        # Extract base name (remove .deletable suffix)
-        local base="${deletable_file%.deletable}"
-        local iso_path="${base}"
-
-        # Check if ISO exists
-        if [[ ! -f "$iso_path" ]]; then
-            log_debug "ISO not found for deletable marker: $iso_path"
-            continue
-        fi
+    # Find .iso.deletable files (the ISO was renamed to include .deletable suffix)
+    find "$staging_dir" -maxdepth 1 -name "*.iso.deletable" -type f 2>/dev/null | while read -r deletable_file; do
+        # The deletable file IS the ISO - extract title-timestamp from filename
+        # Format: TITLE-TIMESTAMP.iso.deletable
+        local basename=$(basename "$deletable_file")
+        local title_timestamp="${basename%.iso.deletable}"
 
         # Check if already archived (skip if .archived state exists)
-        local title_timestamp=$(basename "$base")
         local archived_state="${staging_dir}/${title_timestamp}.archived"
         if [[ -f "$archived_state" ]]; then
-            log_debug "Already archived, skipping: $iso_path"
+            log_debug "Already archived, skipping: $deletable_file"
             continue
         fi
 
         # Check if currently archiving (skip if .archiving state exists)
         local archiving_state="${staging_dir}/${title_timestamp}.archiving"
         if [[ -f "$archiving_state" ]]; then
-            log_debug "Currently archiving, skipping: $iso_path"
+            log_debug "Currently archiving, skipping: $deletable_file"
             continue
         fi
 
-        echo "$iso_path"
+        # Return the deletable file path (it IS the ISO)
+        echo "$deletable_file"
     done
 }
 

@@ -39,8 +39,13 @@ archive_iso() {
     log_info "[ARCHIVE] Processing: $iso_path"
 
     # Extract title and timestamp from filename
-    # Format: TITLE-TIMESTAMP.iso
-    local basename=$(basename "$iso_path" .iso)
+    # Format: TITLE-TIMESTAMP.iso.deletable (the .deletable suffix indicates it's safe to delete)
+    local filename=$(basename "$iso_path")
+    local basename="${filename%.iso.deletable}"
+    if [[ "$basename" == "$filename" ]]; then
+        # Fallback: try .iso suffix
+        basename="${filename%.iso}"
+    fi
     local title="${basename%-*}"
     local timestamp="${basename##*-}"
 
