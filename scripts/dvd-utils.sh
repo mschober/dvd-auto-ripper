@@ -1029,6 +1029,106 @@ release_encoder_slot() {
     fi
 }
 
+# ============================================================================
+# Pipeline Mode: Parallel Transfer Support
+# ============================================================================
+
+# Default parallel transfer configuration
+MAX_PARALLEL_TRANSFERS="${MAX_PARALLEL_TRANSFERS:-5}"
+ENABLE_PARALLEL_TRANSFERS="${ENABLE_PARALLEL_TRANSFERS:-1}"
+
+# Count currently active transfer slots
+# Usage: count_active_transfers
+# Returns: number of active transfer processes
+count_active_transfers() {
+    local count=0
+    for i in $(seq 1 "$MAX_PARALLEL_TRANSFERS"); do
+        local lock_file="/run/dvd-ripper/transfer-${i}.lock"
+        if [[ -f "$lock_file" ]]; then
+            local pid=$(cat "$lock_file" 2>/dev/null)
+            if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+                count=$((count + 1))
+            fi
+        fi
+    done
+    echo "$count"
+}
+
+# Acquire a transfer slot for parallel transfers
+# Usage: acquire_transfer_slot
+# Returns: slot number (1-N) on stdout, 0 exit code if acquired, 1 if none available
+acquire_transfer_slot() {
+    # If parallel transfers disabled, use legacy single lock
+    if [[ "$ENABLE_PARALLEL_TRANSFERS" != "1" ]]; then
+        if acquire_stage_lock "transfer"; then
+            echo "0"  # Slot 0 = legacy mode
+            return 0
+        fi
+        return 1
+    fi
+
+    # Try to find an available slot
+    for i in $(seq 1 "$MAX_PARALLEL_TRANSFERS"); do
+        local lock_file="/run/dvd-ripper/transfer-${i}.lock"
+
+        if [[ -f "$lock_file" ]]; then
+            local existing_pid=$(cat "$lock_file" 2>/dev/null)
+            if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+                # Slot is busy
+                continue
+            else
+                # Stale lock, clean up
+                log_info "Stale transfer-${i} lock found, removing"
+                rm -f "$lock_file"
+            fi
+        fi
+
+        # Try to claim this slot
+        echo "$$" > "$lock_file"
+        chmod 664 "$lock_file" 2>/dev/null  # Group-writable for multi-user access
+        log_info "Acquired transfer slot $i with PID $$"
+        echo "$i"
+        return 0
+    done
+
+    log_debug "All transfer slots ($MAX_PARALLEL_TRANSFERS) are busy"
+    return 1
+}
+
+# Release a specific transfer slot
+# Usage: release_transfer_slot SLOT_NUMBER
+release_transfer_slot() {
+    local slot="$1"
+
+    # If slot 0 (legacy mode), use legacy release
+    if [[ "$slot" == "0" ]]; then
+        release_stage_lock "transfer"
+        return
+    fi
+
+    local lock_file="/run/dvd-ripper/transfer-${slot}.lock"
+    if [[ -f "$lock_file" ]]; then
+        rm -f "$lock_file"
+        log_debug "Released transfer slot $slot"
+    fi
+}
+
+# Get log file for a specific transfer slot
+# Usage: get_transfer_log_file SLOT_NUMBER
+# Returns: path to slot-specific log file
+get_transfer_log_file() {
+    local slot="$1"
+    if [[ "$slot" == "0" ]]; then
+        echo "/var/log/dvd-ripper/transfer.log"
+    else
+        echo "/var/log/dvd-ripper/transfer.${slot}.log"
+    fi
+}
+
+# ============================================================================
+# Pipeline Mode: State File Management
+# ============================================================================
+
 # Claim a state file atomically for processing
 # Used to prevent race conditions when multiple encoders run in parallel
 # Usage: claim_state_file STATE_FILE NEW_STATE
