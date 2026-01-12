@@ -661,8 +661,8 @@ ARCHIVES_HTML = """
                 });
                 const result = await response.json();
 
-                if (result.status === 'started') {
-                    showNotification(`Transfer started: ${prefix} -> ${peerName}`, 'success');
+                if (result.status === 'completed') {
+                    showNotification(`Transfer complete: ${prefix} -> ${peerName}`, 'success');
                     // Refresh after short delay
                     setTimeout(() => location.reload(), 2000);
                 } else {
@@ -910,12 +910,50 @@ def api_archives_transfer():
                 "confirmed": confirm["confirmed"]
             }), 500
 
+        # Transfer confirmed - delete source files (move semantics)
+        deleted = []
+        delete_errors = []
+
+        # Delete ISO file
+        if os.path.exists(archive["iso_path"]):
+            try:
+                os.remove(archive["iso_path"])
+                deleted.append(os.path.basename(archive["iso_path"]))
+            except OSError as e:
+                delete_errors.append(f"ISO: {e}")
+
+        # Delete mapfile
+        if archive["mapfile"] and os.path.exists(archive["mapfile"]):
+            try:
+                os.remove(archive["mapfile"])
+                deleted.append(os.path.basename(archive["mapfile"]))
+            except OSError as e:
+                delete_errors.append(f"Mapfile: {e}")
+
+        # Delete keys directory
+        if archive["keys_dir"] and os.path.exists(archive["keys_dir"]):
+            try:
+                shutil.rmtree(archive["keys_dir"])
+                deleted.append(os.path.basename(archive["keys_dir"]))
+            except OSError as e:
+                delete_errors.append(f"Keys: {e}")
+
+        # Delete state file (if any)
+        if archive["state_file"] and os.path.exists(archive["state_file"]):
+            try:
+                os.remove(archive["state_file"])
+                deleted.append(os.path.basename(archive["state_file"]))
+            except OSError as e:
+                delete_errors.append(f"State: {e}")
+
         return jsonify({
             "status": "completed",
             "prefix": prefix,
             "peer": peer_name,
             "transferred": transferred,
-            "confirmed": confirm["confirmed"]
+            "confirmed": confirm["confirmed"],
+            "deleted": deleted,
+            "delete_errors": delete_errors if delete_errors else None
         })
 
     except Exception as e:
