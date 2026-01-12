@@ -1120,7 +1120,8 @@ def api_archives_transfer():
     }
     try:
         # Debug: write state_data to temp file for inspection
-        with open("/tmp/transfer-debug.json", 'w') as dbg:
+        debug_file = os.path.join(STAGING_DIR, "transfer-debug.json")
+        with open(debug_file, 'w') as dbg:
             json.dump(state_data, dbg, indent=2)
 
         with open(state_file, 'w') as f:
