@@ -519,6 +519,12 @@ ARCHIVES_HTML = """
             color: #059669;
             font-weight: 500;
         }
+        .transfer-percent {
+            font-size: 11px;
+            color: #059669;
+            font-weight: 600;
+            margin-left: 8px;
+        }
 
         .files-cell { font-size: 12px; color: #6b7280; }
         .files-cell span { margin-right: 8px; }
@@ -771,10 +777,16 @@ ARCHIVES_HTML = """
                             <td class="size-cell">{{ format_size(archive.iso_size) }}</td>
                             <td>
                                 {% if archive.state == 'archive-transferring' %}
-                                <div class="transfer-progress">
+                                <div class="transfer-progress"
+                                     data-prefix="{{ archive.prefix }}"
+                                     data-peer="{{ archive.transfer_peer }}"
+                                     data-peer-host="{{ archive.metadata.peer_host if archive.metadata else '' }}"
+                                     data-peer-port="{{ archive.metadata.peer_port if archive.metadata else '' }}"
+                                     data-iso-size="{{ archive.iso_size }}">
                                     <span class="badge badge-transferring">→ {{ archive.transfer_peer }}</span>
-                                    <div class="progress-bar-mini pulsing">
-                                        <div class="progress-bar-fill" style="width: 100%;"></div>
+                                    <span class="transfer-percent"></span>
+                                    <div class="progress-bar-mini">
+                                        <div class="progress-bar-fill" style="width: 0%;"></div>
                                     </div>
                                 </div>
                                 {% elif archive.state %}
@@ -1003,6 +1015,51 @@ ARCHIVES_HTML = """
                 }, 1000);
             }
         }
+
+        // Poll transfer progress for archives being transferred
+        async function pollTransferProgress() {
+            const transfers = document.querySelectorAll('.transfer-progress[data-peer-host]');
+            if (transfers.length === 0) return;
+
+            for (const el of transfers) {
+                const prefix = el.dataset.prefix;
+                const peerHost = el.dataset.peerHost;
+                const peerPort = el.dataset.peerPort;
+                const isoSize = parseInt(el.dataset.isoSize) || 0;
+
+                if (!peerHost || !peerPort || !isoSize) continue;
+
+                try {
+                    const response = await fetch(`http://${peerHost}:${peerPort}/api/archives/receiving`);
+                    if (!response.ok) continue;
+
+                    const data = await response.json();
+                    const recv = data.receiving.find(r => r.prefix === prefix);
+
+                    if (recv) {
+                        const percent = Math.round((recv.current_size / isoSize) * 100);
+                        const percentEl = el.querySelector('.transfer-percent');
+                        const fillEl = el.querySelector('.progress-bar-fill');
+
+                        if (percentEl) percentEl.textContent = `${percent}%`;
+                        if (fillEl) fillEl.style.width = `${percent}%`;
+                    }
+                } catch (err) {
+                    // Silently ignore polling errors
+                }
+            }
+        }
+
+        // Poll every 3 seconds if there are active transfers
+        if (document.querySelectorAll('.transfer-progress[data-peer-host]').length > 0) {
+            pollTransferProgress();
+            setInterval(pollTransferProgress, 3000);
+        }
+
+        // Auto-refresh page every 30 seconds to detect completed transfers
+        if (document.querySelectorAll('.transfer-progress, .receiving-item').length > 0) {
+            setTimeout(() => location.reload(), 30000);
+        }
     </script>
 </body>
 </html>
@@ -1090,6 +1147,19 @@ def api_archives():
         "count": len(archives),
         "archives": archives,
         "staging_dir": STAGING_DIR
+    })
+
+
+@archives_bp.route("/api/archives/receiving")
+def api_archives_receiving():
+    """API: Get receiving transfers (rsync temp files).
+
+    Used by source node to poll transfer progress.
+    """
+    receiving = get_receiving_transfers()
+    return jsonify({
+        "count": len(receiving),
+        "receiving": receiving
     })
 
 
