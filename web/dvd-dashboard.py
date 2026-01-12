@@ -611,6 +611,14 @@ def get_active_progress():
                 title = meta.get("title", "Unknown").replace('_', ' ')
                 iso_size = meta.get("iso_size_bytes", 0)
                 started_at = meta.get("started_at", "")
+                started_time = ""
+                if started_at:
+                    try:
+                        from datetime import datetime
+                        st = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+                        started_time = st.strftime("%-I:%M %p")
+                    except Exception:
+                        started_time = started_at[:16] if len(started_at) > 16 else started_at
 
                 # Calculate progress from xz output file size
                 xz_path = f"{iso_path}.xz"
@@ -652,7 +660,8 @@ def get_active_progress():
                     "title": title,
                     "percent": round(percent, 1),
                     "speed": speed,
-                    "eta": eta
+                    "eta": eta,
+                    "started_time": started_time
                 })
             except Exception:
                 pass
@@ -2265,7 +2274,7 @@ DASHBOARD_HTML = """
                 {% for arch in progress.archive %}
                 <div class="progress-item">
                     <div class="progress-header">
-                        <span class="progress-label">Archiving: {{ arch.title }}</span>
+                        <span class="progress-label">Archiving: {{ arch.title }}{% if arch.started_time %} (started {{ arch.started_time }}){% endif %}</span>
                         <span class="progress-stats">{{ "%.1f"|format(arch.percent) }}% | {{ arch.speed }} | ETA: {{ arch.eta }}</span>
                     </div>
                     <div class="progress-bar">
@@ -2450,10 +2459,11 @@ DASHBOARD_HTML = """
 
                 if (data.archive && Array.isArray(data.archive)) {
                     data.archive.forEach(arch => {
+                        const startedInfo = arch.started_time ? ` (started ${arch.started_time})` : '';
                         html += `
                             <div class="progress-item">
                                 <div class="progress-header">
-                                    <span class="progress-label">Archiving: ${arch.title}</span>
+                                    <span class="progress-label">Archiving: ${arch.title}${startedInfo}</span>
                                     <span class="progress-stats">${arch.percent.toFixed(1)}% | ${arch.speed} | ETA: ${arch.eta}</span>
                                 </div>
                                 <div class="progress-bar">
