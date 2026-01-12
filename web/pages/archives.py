@@ -3,11 +3,12 @@ import os
 import glob
 import json
 import shutil
+import subprocess
 from datetime import datetime
 from flask import Blueprint, jsonify, render_template_string, request
 
 from helpers.pipeline import STAGING_DIR, STATE_ORDER
-from helpers.cluster import rsync_files, rsync_directory, confirm_files_on_peer
+from helpers.cluster import rsync_files, rsync_directory, confirm_files_on_peer, call_peer_api
 
 # Blueprint setup
 archives_bp = Blueprint('archives', __name__)
@@ -127,6 +128,30 @@ def format_size(size_bytes):
             return f"{size_bytes:.1f} {unit}"
         size_bytes /= 1024
     return f"{size_bytes:.1f} PB"
+
+
+def get_local_disk_usage():
+    """Get disk usage for staging directory."""
+    try:
+        result = subprocess.run(
+            ["df", "-h", STAGING_DIR],
+            capture_output=True, text=True, timeout=5
+        )
+        lines = result.stdout.strip().split("\n")
+        if len(lines) >= 2:
+            parts = lines[1].split()
+            return {
+                "mount": parts[5] if len(parts) > 5 else parts[0],
+                "total": parts[1],
+                "used": parts[2],
+                "available": parts[3],
+                "percent": parts[4].rstrip("%"),
+                "percent_num": int(parts[4].rstrip("%"))
+            }
+    except Exception:
+        pass
+    return {"mount": "N/A", "total": "N/A", "used": "N/A",
+            "available": "N/A", "percent": "0", "percent_num": 0}
 
 
 def get_cluster_config_for_archives():
@@ -309,6 +334,27 @@ ARCHIVES_HTML = """
         .status-online { background: #10b981; }
         .status-offline { background: #ef4444; }
 
+        /* Disk usage bars */
+        .disk-usage { margin-top: 8px; }
+        .disk-bar {
+            height: 8px;
+            background: #e5e7eb;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .disk-bar-fill {
+            height: 100%;
+            background: #3b82f6;
+            transition: width 0.3s ease;
+        }
+        .disk-bar-fill.warning { background: #f59e0b; }
+        .disk-bar-fill.danger { background: #ef4444; }
+        .disk-text {
+            font-size: 11px;
+            color: #6b7280;
+            margin-top: 4px;
+        }
+
         .empty-state {
             text-align: center;
             padding: 40px;
@@ -418,6 +464,14 @@ ARCHIVES_HTML = """
             <div class="summary-value">{{ total_size_gb }} GB</div>
             <div class="summary-label">Total Size</div>
         </div>
+        <div class="summary-stat">
+            <div class="summary-value">{{ disk_usage.available }}</div>
+            <div class="summary-label">Available ({{ disk_usage.percent }}% used)</div>
+            <div class="disk-bar" style="margin-top: 8px;">
+                <div class="disk-bar-fill {{ 'danger' if disk_usage.percent_num > 90 else 'warning' if disk_usage.percent_num > 75 else '' }}"
+                     style="width: {{ disk_usage.percent_num }}%;"></div>
+            </div>
+        </div>
     </div>
 
     <div class="layout">
@@ -508,6 +562,15 @@ ARCHIVES_HTML = """
                         Offline
                         {% endif %}
                     </div>
+                    {% if peer.disk %}
+                    <div class="disk-usage">
+                        <div class="disk-bar">
+                            <div class="disk-bar-fill {{ 'danger' if peer.disk.percent_num > 90 else 'warning' if peer.disk.percent_num > 75 else '' }}"
+                                 style="width: {{ peer.disk.percent_num }}%;"></div>
+                        </div>
+                        <div class="disk-text">{{ peer.disk.available }} free of {{ peer.disk.total }}</div>
+                    </div>
+                    {% endif %}
                 </div>
                 {% endfor %}
             </div>
@@ -671,16 +734,26 @@ def archives_page():
     config = get_cluster_config_for_archives()
     archives = get_iso_archives()
 
+    # Get local disk usage
+    disk_usage = get_local_disk_usage()
+
     # Get peer status if clustered
     peers = []
     if config["cluster_enabled"]:
         raw_peers = parse_peers(config["peers_raw"])
         for peer in raw_peers:
+            online = ping_peer_simple(peer["host"], peer["port"])
+            peer_disk = None
+            if online:
+                disk_result = call_peer_api(peer["host"], peer["port"], "/api/disk", timeout=5)
+                if disk_result["success"]:
+                    peer_disk = disk_result["response"]
             peers.append({
                 "name": peer["name"],
                 "host": peer["host"],
                 "port": peer["port"],
-                "online": ping_peer_simple(peer["host"], peer["port"])
+                "online": online,
+                "disk": peer_disk
             })
 
     # Calculate totals
@@ -702,6 +775,7 @@ def archives_page():
         archives=archives,
         total_count=len(archives),
         total_size_gb=round(total_size / (1024**3), 2),
+        disk_usage=disk_usage,
         cluster_enabled=config["cluster_enabled"],
         node_name=config["node_name"],
         peers=peers,
