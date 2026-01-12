@@ -213,6 +213,25 @@ MAX_PARALLEL_ENCODERS="2"
 ENCODER_LOAD_THRESHOLD="0.8"
 
 # ============================================================================
+# Parallel Transfer Configuration
+# ============================================================================
+# Enable parallel transfers to run multiple rsync jobs simultaneously.
+# Useful when transferring many files to NAS over fast network.
+#
+# When enabled, the transfer service uses numbered lock files:
+#   /run/dvd-ripper/transfer-1.lock
+#   /run/dvd-ripper/transfer-2.lock
+#   etc.
+
+# Enable parallel transfers (0=disabled/single transfer, 1=enabled)
+# Default: enabled - process multiple files per timer run
+ENABLE_PARALLEL_TRANSFERS="1"
+
+# Maximum number of concurrent transfer processes
+# Default: 5 - adjust based on network bandwidth and NAS capability
+MAX_PARALLEL_TRANSFERS="5"
+
+# ============================================================================
 # Transfer Mode Configuration
 # ============================================================================
 # Control how encoded videos are transferred to their final destination.

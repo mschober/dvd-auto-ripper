@@ -208,9 +208,26 @@ def get_lock_status():
     """Check which stages are currently locked/running."""
     status = {}
 
-    # Check transfer and distribute locks (single instance)
-    for stage in ["transfer", "distribute"]:
-        status[stage] = check_lock_file(LOCK_FILES[stage])
+    # Check distribute lock (single instance)
+    status["distribute"] = check_lock_file(LOCK_FILES["distribute"])
+
+    # Check parallel transfer locks (transfer-1.lock, transfer-2.lock, etc.)
+    transfer_locks = glob.glob(os.path.join(LOCK_DIR, "transfer-*.lock"))
+    transfer_slots = {}
+    for lock_file in transfer_locks:
+        # Extract slot number: transfer-1.lock -> 1
+        slot = os.path.basename(lock_file).replace("transfer-", "").replace(".lock", "")
+        transfer_slots[slot] = check_lock_file(lock_file)
+
+    # Also check legacy transfer.lock for backwards compatibility
+    legacy_transfer = LOCK_FILES["transfer"]
+    legacy_status = check_lock_file(legacy_transfer)
+    if legacy_status["active"]:
+        transfer_slots["legacy"] = legacy_status
+
+    # Provide combined "transfer" status (active if any slot is active)
+    any_transfer_active = any(s.get("active") for s in transfer_slots.values())
+    status["transfer"] = {"active": any_transfer_active, "pid": None, "slots": transfer_slots}
 
     # Check parallel encoder locks (encoder-1.lock, encoder-2.lock, etc.)
     encoder_locks = glob.glob(os.path.join(LOCK_DIR, "encoder-*.lock"))
@@ -498,33 +515,81 @@ def get_active_progress():
                 "eta": last_match[2]
             }
 
-    # Parse rsync transfer progress
+    # Parse rsync transfer progress (per-slot, like encoder)
     # Pattern: "XX% XX.XXMB/s X:XX:XX" or "XXX,XXX,XXX  XX%  XX.XXmB/s    X:XX:XX"
-    if locks.get("transfer", {}).get("active"):
-        # Read transfer log directly
-        transfer_log = LOG_FILES.get("transfer", "")
-        transfer_logs = ""
-        if transfer_log and os.path.exists(transfer_log):
+    transfer_status = locks.get("transfer", {})
+    transfer_slots = transfer_status.get("slots", {})
+    active_transfer_slots = [s for s, info in transfer_slots.items() if info.get("active")]
+
+    if transfer_status.get("active") and active_transfer_slots:
+        # Load all .transferring files to map slots to titles
+        transferring_files = glob.glob(os.path.join(STAGING_DIR, "*.transferring"))
+        all_transfer_titles = []
+        for tf in transferring_files:
             try:
-                with open(transfer_log, 'r') as f:
-                    f.seek(0, 2)
-                    size = f.tell()
-                    f.seek(max(0, size - 10240))
-                    transfer_logs = f.read()
+                with open(tf, 'r') as f:
+                    meta = json.load(f)
+                    title = meta.get("title", "").replace('_', ' ')
+                    if title:
+                        all_transfer_titles.append(title)
             except Exception:
                 pass
 
-        transfer_matches = re.findall(
-            r'(\d+)%\s+([\d.]+[KMG]?B/s)\s+(\d+:\d+:\d+)',
-            transfer_logs
-        )
-        if transfer_matches:
-            last_match = transfer_matches[-1]
-            progress["transfer"] = {
-                "percent": float(last_match[0]),
-                "speed": last_match[1],
-                "eta": last_match[2]
-            }
+        transfer_progress_list = []
+        for idx, slot in enumerate(active_transfer_slots):
+            # Read per-slot log file
+            slot_log_file = os.path.join(LOG_DIR, f"transfer.{slot}.log")
+            slot_logs = ""
+            if os.path.exists(slot_log_file):
+                try:
+                    with open(slot_log_file, 'r') as f:
+                        f.seek(0, 2)
+                        size = f.tell()
+                        f.seek(max(0, size - 10240))
+                        slot_logs = f.read()
+                except Exception:
+                    pass
+
+            # Fallback to legacy log if no per-slot log
+            if not slot_logs:
+                transfer_log = LOG_FILES.get("transfer", "")
+                if transfer_log and os.path.exists(transfer_log):
+                    try:
+                        with open(transfer_log, 'r') as f:
+                            f.seek(0, 2)
+                            size = f.tell()
+                            f.seek(max(0, size - 10240))
+                            slot_logs = f.read()
+                    except Exception:
+                        pass
+
+            # Get title from transferring files
+            title = all_transfer_titles[idx] if idx < len(all_transfer_titles) else f"Slot {slot}"
+
+            transfer_matches = re.findall(
+                r'(\d+)%\s+([\d.]+[KMG]?B/s)\s+(\d+:\d+:\d+)',
+                slot_logs
+            )
+            if transfer_matches:
+                last_match = transfer_matches[-1]
+                transfer_progress_list.append({
+                    "slot": slot,
+                    "title": title,
+                    "percent": float(last_match[0]),
+                    "speed": last_match[1],
+                    "eta": last_match[2]
+                })
+            else:
+                transfer_progress_list.append({
+                    "slot": slot,
+                    "title": title,
+                    "percent": 0,
+                    "speed": "starting",
+                    "eta": "calculating"
+                })
+
+        if transfer_progress_list:
+            progress["transfer"] = transfer_progress_list  # Now a list!
 
     return progress
 
@@ -2114,15 +2179,17 @@ DASHBOARD_HTML = """
                 </div>
                 {% endif %}
                 {% if progress.transfer %}
+                {% for xfer in progress.transfer %}
                 <div class="progress-item">
                     <div class="progress-header">
-                        <span class="progress-label">Transfer</span>
-                        <span class="progress-stats">{{ "%.1f"|format(progress.transfer.percent) }}% | {{ progress.transfer.speed }} | ETA: {{ progress.transfer.eta }}</span>
+                        <span class="progress-label">Transfer: {{ xfer.title }}</span>
+                        <span class="progress-stats">{{ "%.1f"|format(xfer.percent) }}% | {{ xfer.speed }} | ETA: {{ xfer.eta }}</span>
                     </div>
                     <div class="progress-bar">
-                        <div class="progress-fill progress-transfer" style="width: {{ progress.transfer.percent }}%"></div>
+                        <div class="progress-fill progress-transfer" style="width: {{ xfer.percent }}%"></div>
                     </div>
                 </div>
+                {% endfor %}
                 {% endif %}
                 {% if progress.receiving %}
                 {% for recv in progress.receiving %}
@@ -2283,17 +2350,19 @@ DASHBOARD_HTML = """
                         </div>`;
                 }
 
-                if (data.transfer) {
-                    html += `
-                        <div class="progress-item">
-                            <div class="progress-header">
-                                <span class="progress-label">Transfer</span>
-                                <span class="progress-stats">${data.transfer.percent.toFixed(1)}% | ${data.transfer.speed} | ETA: ${data.transfer.eta}</span>
-                            </div>
-                            <div class="progress-bar">
-                                <div class="progress-fill progress-transfer" style="width: ${data.transfer.percent}%"></div>
-                            </div>
-                        </div>`;
+                if (data.transfer && Array.isArray(data.transfer)) {
+                    data.transfer.forEach(xfer => {
+                        html += `
+                            <div class="progress-item">
+                                <div class="progress-header">
+                                    <span class="progress-label">Transfer: ${xfer.title}</span>
+                                    <span class="progress-stats">${xfer.percent.toFixed(1)}% | ${xfer.speed} | ETA: ${xfer.eta}</span>
+                                </div>
+                                <div class="progress-bar">
+                                    <div class="progress-fill progress-transfer" style="width: ${xfer.percent}%"></div>
+                                </div>
+                            </div>`;
+                    });
                 }
 
                 if (data.receiving && Array.isArray(data.receiving)) {

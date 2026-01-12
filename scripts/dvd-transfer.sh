@@ -1,6 +1,7 @@
 #!/bin/bash
 # DVD Transfer - Stage 3 of Pipeline
-# Transfers ONE encoded video to NAS/Plex server per run
+# Transfers encoded videos to NAS/Plex server
+# Supports parallel transfers (up to MAX_PARALLEL_TRANSFERS, default 5)
 # Run via cron/systemd timer every 15 minutes
 
 set -euo pipefail
@@ -349,6 +350,38 @@ check_transfer_recovery() {
 }
 
 # ============================================================================
+# Parallel Transfer Worker
+# ============================================================================
+
+# Worker function for parallel transfers
+# Runs in a subshell, handles one file transfer
+transfer_worker() {
+    local state_file="$1"
+    local slot="$2"
+    local log_file=$(get_transfer_log_file "$slot")
+
+    # Use slot-specific log file
+    export LOG_FILE_OVERRIDE="$log_file"
+
+    log_info "[TRANSFER:$slot] Starting transfer for: $(basename "$state_file")"
+
+    # Transfer the video
+    transfer_video "$state_file"
+    local exit_code=$?
+
+    if [[ $exit_code -eq 0 ]]; then
+        log_info "[TRANSFER:$slot] Transfer completed successfully"
+    else
+        log_error "[TRANSFER:$slot] Transfer failed"
+    fi
+
+    # Release the slot
+    release_transfer_slot "$slot"
+
+    return $exit_code
+}
+
+# ============================================================================
 # Main Entry Point
 # ============================================================================
 
@@ -375,43 +408,83 @@ main() {
         fi
     fi
 
-    # Try to acquire stage lock (non-blocking)
-    if ! acquire_stage_lock "transfer"; then
-        log_info "[TRANSFER] Another transfer is already running, exiting"
-        exit 0
-    fi
-
-    # Set up cleanup trap
-    trap 'release_stage_lock "transfer"; log_info "[TRANSFER] DVD Transfer stopped"' EXIT INT TERM
-
     # Check for recovery scenarios
     check_transfer_recovery
 
-    # Find oldest encoded-ready state file
-    local state_file=$(find_oldest_state "encoded-ready")
-
-    if [[ -z "$state_file" ]]; then
+    # Count pending videos
+    local pending=$(count_pending_state "encoded-ready")
+    if [[ "$pending" -eq 0 ]]; then
         log_info "[TRANSFER] No videos pending transfer"
         exit 0
     fi
 
-    local pending=$(count_pending_state "encoded-ready")
     log_info "[TRANSFER] Found $pending video(s) pending transfer"
-    log_info "[TRANSFER] Processing oldest: $state_file"
 
-    # Transfer the video
-    transfer_video "$state_file"
-    local exit_code=$?
-
-    if [[ $exit_code -eq 0 ]]; then
-        log_info "[TRANSFER] Transfer completed successfully"
-        local remaining=$(count_pending_state "encoded-ready")
-        log_info "[TRANSFER] Videos remaining: $remaining"
-    else
-        log_error "[TRANSFER] Transfer failed"
+    # Log parallel transfer status
+    if [[ "${ENABLE_PARALLEL_TRANSFERS:-1}" == "1" ]]; then
+        local active_transfers=$(count_active_transfers)
+        log_info "[TRANSFER] Parallel transfers enabled: max=$MAX_PARALLEL_TRANSFERS, active=$active_transfers"
     fi
 
-    exit $exit_code
+    # Collect state files to process
+    local -a state_files=()
+    local -a slots=()
+    local -a pids=()
+
+    # Get pending state files and acquire slots
+    while IFS= read -r state_file; do
+        [[ -z "$state_file" ]] && continue
+
+        # Try to acquire a transfer slot
+        local slot
+        slot=$(acquire_transfer_slot)
+        if [[ $? -ne 0 ]]; then
+            log_info "[TRANSFER] No more transfer slots available"
+            break
+        fi
+
+        # Try to claim the state file atomically
+        local claimed_file
+        claimed_file=$(claim_state_file "$state_file" "transferring")
+        if [[ $? -ne 0 ]]; then
+            log_info "[TRANSFER] State file claimed by another worker, skipping"
+            release_transfer_slot "$slot"
+            continue
+        fi
+
+        state_files+=("$claimed_file")
+        slots+=("$slot")
+    done < <(find "$STAGING_DIR" -maxdepth 1 -name "*.encoded-ready" -type f 2>/dev/null | sort | head -n "$MAX_PARALLEL_TRANSFERS")
+
+    # Start workers
+    local jobs_started=0
+    for i in "${!state_files[@]}"; do
+        local state_file="${state_files[$i]}"
+        local slot="${slots[$i]}"
+
+        log_info "[TRANSFER] Starting worker for slot $slot: $(basename "$state_file")"
+        transfer_worker "$state_file" "$slot" &
+        pids+=($!)
+        ((jobs_started++))
+    done
+
+    if [[ $jobs_started -eq 0 ]]; then
+        log_info "[TRANSFER] No transfers started (all slots busy or no files claimed)"
+        exit 0
+    fi
+
+    log_info "[TRANSFER] Started $jobs_started parallel transfer(s)"
+
+    # Wait for all workers to complete
+    local overall_exit=0
+    for pid in "${pids[@]}"; do
+        wait "$pid" || overall_exit=1
+    done
+
+    local remaining=$(count_pending_state "encoded-ready")
+    log_info "[TRANSFER] All transfers complete. Videos remaining: $remaining"
+
+    exit $overall_exit
 }
 
 # Run main function if script is executed directly
