@@ -703,7 +703,7 @@ ARCHIVES_HTML = """
 
                 if (result.status === 'deleted' || result.status === 'partial') {
                     showNotification(`Deleted: ${result.deleted.length} files`, 'success');
-                    setTimeout(() => location.reload(), 1000);
+                    setTimeout(() => location.reload(), 2000);
                 } else {
                     showNotification(result.error || 'Delete failed', 'error');
                 }
@@ -731,12 +731,12 @@ ARCHIVES_HTML = """
             notif.innerHTML = message + '<span class="notification-close">✕</span>';
             notif.querySelector('.notification-close').onclick = () => notif.remove();
             document.body.appendChild(notif);
-            // Success fades after 3s, errors stay until closed
+            // Success fades after 1s, errors stay until closed
             if (type === 'success') {
                 setTimeout(() => {
                     notif.classList.add('fade-out');
                     setTimeout(() => notif.remove(), 500);
-                }, 3000);
+                }, 1000);
             }
         }
     </script>

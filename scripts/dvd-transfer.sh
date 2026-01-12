@@ -424,6 +424,8 @@ main() {
     if [[ "${ENABLE_PARALLEL_TRANSFERS:-1}" == "1" ]]; then
         local active_transfers=$(count_active_transfers)
         log_info "[TRANSFER] Parallel transfers enabled: max=$MAX_PARALLEL_TRANSFERS, active=$active_transfers"
+    else
+        log_info "[TRANSFER] Parallel transfers disabled (legacy single mode)"
     fi
 
     # Collect state files to process
@@ -431,17 +433,23 @@ main() {
     local -a slots=()
     local -a pids=()
 
+    # Debug: count files to process
+    local files_to_process=$(find "$STAGING_DIR" -maxdepth 1 -name "*.encoded-ready" -type f 2>/dev/null | wc -l)
+    log_info "[TRANSFER] Files in encoded-ready state: $files_to_process"
+
     # Get pending state files and acquire slots
     while IFS= read -r state_file; do
         [[ -z "$state_file" ]] && continue
+        log_info "[TRANSFER] Processing file: $(basename "$state_file")"
 
         # Try to acquire a transfer slot
         local slot
         slot=$(acquire_transfer_slot)
         if [[ $? -ne 0 ]]; then
-            log_info "[TRANSFER] No more transfer slots available"
+            log_info "[TRANSFER] No more transfer slots available (tried after ${#slots[@]} acquired)"
             break
         fi
+        log_info "[TRANSFER] Acquired slot $slot"
 
         # Try to claim the state file atomically
         local claimed_file
@@ -451,6 +459,7 @@ main() {
             release_transfer_slot "$slot"
             continue
         fi
+        log_info "[TRANSFER] Claimed file, added to batch: $(basename "$claimed_file")"
 
         state_files+=("$claimed_file")
         slots+=("$slot")
