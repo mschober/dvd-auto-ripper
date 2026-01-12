@@ -5,13 +5,12 @@ import json
 import shutil
 import socket
 import subprocess
-import threading
 import time
 from datetime import datetime
 from flask import Blueprint, jsonify, render_template_string, request
 
 from helpers.pipeline import STAGING_DIR, STATE_ORDER
-from helpers.cluster import rsync_files, rsync_directory, confirm_files_on_peer, call_peer_api
+from helpers.cluster import call_peer_api
 
 # Blueprint setup
 archives_bp = Blueprint('archives', __name__)
@@ -218,110 +217,6 @@ def get_local_disk_usage():
         pass
     return {"mount": "N/A", "total": "N/A", "used": "N/A",
             "available": "N/A", "percent": "0", "percent_num": 0}
-
-
-def do_background_transfer(archive, peer_host, peer_port, peer_name, ssh_user, remote_staging, state_file):
-    """Background thread function to perform archive transfer.
-
-    This runs rsync, confirms files on peer, and cleans up source files on success.
-    Updates the state file with progress/errors.
-    """
-    prefix = archive["prefix"]
-    start_time = time.time()
-
-    try:
-        # Build file list
-        files_to_transfer = [archive["iso_path"]]
-        if archive.get("mapfile"):
-            files_to_transfer.append(archive["mapfile"])
-
-        # Transfer files via rsync
-        result = rsync_files(files_to_transfer, peer_host, ssh_user, remote_staging)
-
-        if not result["success"]:
-            # Update state file with error
-            with open(state_file, 'w') as f:
-                json.dump({
-                    "status": "failed",
-                    "peer": peer_name,
-                    "error": result["errors"],
-                    "started": start_time,
-                    "finished": time.time()
-                }, f)
-            return
-
-        transferred = result["transferred"]
-
-        # Transfer keys directory if exists
-        if archive.get("keys_dir"):
-            keys_result = rsync_directory(archive["keys_dir"], peer_host, ssh_user, remote_staging)
-            if keys_result["success"]:
-                transferred.extend(keys_result["transferred"])
-
-        # Confirm files arrived on peer
-        filenames_to_confirm = [os.path.basename(f) for f in files_to_transfer]
-        confirm = confirm_files_on_peer(peer_host, peer_port, filenames_to_confirm)
-
-        if not confirm["success"] or confirm["missing"]:
-            with open(state_file, 'w') as f:
-                json.dump({
-                    "status": "failed",
-                    "peer": peer_name,
-                    "error": confirm.get("error") or f"Missing files: {confirm['missing']}",
-                    "started": start_time,
-                    "finished": time.time()
-                }, f)
-            return
-
-        # Transfer confirmed - delete source files (move semantics)
-        deleted = []
-
-        if os.path.exists(archive["iso_path"]):
-            try:
-                os.remove(archive["iso_path"])
-                deleted.append(os.path.basename(archive["iso_path"]))
-            except OSError:
-                pass
-
-        if archive.get("mapfile") and os.path.exists(archive["mapfile"]):
-            try:
-                os.remove(archive["mapfile"])
-                deleted.append(os.path.basename(archive["mapfile"]))
-            except OSError:
-                pass
-
-        if archive.get("keys_dir") and os.path.exists(archive["keys_dir"]):
-            try:
-                shutil.rmtree(archive["keys_dir"])
-                deleted.append(os.path.basename(archive["keys_dir"]))
-            except OSError:
-                pass
-
-        # Delete old state file if any (not the transferring state file)
-        old_state = archive.get("state_file")
-        if old_state and old_state != state_file and os.path.exists(old_state):
-            try:
-                os.remove(old_state)
-            except OSError:
-                pass
-
-        # Remove the transferring state file on success
-        if os.path.exists(state_file):
-            os.remove(state_file)
-
-    except Exception as e:
-        # Update state file with error
-        try:
-            with open(state_file, 'w') as f:
-                json.dump({
-                    "status": "failed",
-                    "peer": peer_name,
-                    "error": str(e),
-                    "started": start_time,
-                    "finished": time.time()
-                }, f)
-        except:
-            pass
 
 
 def get_cluster_config_for_archives():
@@ -1165,13 +1060,13 @@ def api_archives_receiving():
 
 @archives_bp.route("/api/archives/transfer", methods=["POST"])
 def api_archives_transfer():
-    """API: Transfer an ISO archive to a peer node (async).
+    """API: Transfer an ISO archive to a peer node (async subprocess).
 
-    Starts background transfer and returns immediately:
-    1. Creates state file to track transfer
-    2. Spawns background thread to rsync files
+    Starts background transfer subprocess and returns immediately:
+    1. Creates state file with all transfer parameters
+    2. Spawns archive_transfer.py subprocess (survives dashboard restart)
     3. Returns status "started" immediately
-    4. Background thread confirms and cleans up on success
+    4. Subprocess confirms and cleans up on success
 
     Expected JSON:
     {
@@ -1208,28 +1103,47 @@ def api_archives_transfer():
     ssh_user = config["ssh_user"]
     remote_staging = config["remote_staging"]
 
-    # Create state file to track transfer
+    # Create state file with all parameters for subprocess
     state_file = os.path.join(STAGING_DIR, f"{prefix}.archive-transferring-to-{peer_name}")
     try:
         with open(state_file, 'w') as f:
             json.dump({
-                "status": "transferring",
+                "status": "pending",
                 "peer": peer_name,
                 "peer_host": peer_host,
                 "peer_port": peer_port,
+                "iso_path": archive["iso_path"],
+                "mapfile": archive.get("mapfile"),
+                "keys_dir": archive.get("keys_dir"),
                 "iso_size": archive["iso_size"],
+                "ssh_user": ssh_user,
+                "remote_staging": remote_staging,
                 "started": time.time()
             }, f)
     except OSError as e:
         return jsonify({"error": f"Failed to create state file: {e}"}), 500
 
-    # Start background transfer thread
-    thread = threading.Thread(
-        target=do_background_transfer,
-        args=(archive, peer_host, peer_port, peer_name, ssh_user, remote_staging, state_file),
-        daemon=True
+    # Spawn transfer worker as subprocess (survives dashboard restart)
+    worker_script = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..", "helpers", "archive_transfer.py"
     )
-    thread.start()
+    worker_script = os.path.normpath(worker_script)
+
+    try:
+        subprocess.Popen(
+            ["python3", worker_script, "--state-file", state_file],
+            start_new_session=True,  # Detach from dashboard process
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+    except Exception as e:
+        # Clean up state file on spawn failure
+        try:
+            os.remove(state_file)
+        except OSError:
+            pass
+        return jsonify({"error": f"Failed to spawn transfer worker: {e}"}), 500
 
     return jsonify({
         "status": "started",
