@@ -195,6 +195,50 @@ def format_size(size_bytes):
     return f"{size_bytes:.1f} PB"
 
 
+def get_archived_stats():
+    """Get statistics about compressed ISO archives.
+
+    Returns dict with:
+        - total_archived: count of archived ISOs
+        - total_original_bytes: sum of original ISO sizes
+        - total_compressed_bytes: sum of compressed sizes
+        - average_ratio: average compression ratio
+        - space_saved_bytes: bytes saved through compression
+    """
+    stats = {
+        "total_archived": 0,
+        "total_original_bytes": 0,
+        "total_compressed_bytes": 0,
+        "average_ratio": 0.0,
+        "space_saved_bytes": 0
+    }
+
+    # Find all .archived state files
+    archived_files = glob.glob(os.path.join(STAGING_DIR, "*.archived"))
+
+    for state_file in archived_files:
+        try:
+            with open(state_file, 'r') as f:
+                metadata = json.load(f)
+
+            original_size = metadata.get("original_size_bytes", 0)
+            compressed_size = metadata.get("compressed_size_bytes", 0)
+
+            if original_size > 0:
+                stats["total_archived"] += 1
+                stats["total_original_bytes"] += original_size
+                stats["total_compressed_bytes"] += compressed_size
+        except (json.JSONDecodeError, IOError):
+            continue
+
+    # Calculate averages
+    if stats["total_original_bytes"] > 0:
+        stats["average_ratio"] = stats["total_compressed_bytes"] / stats["total_original_bytes"]
+        stats["space_saved_bytes"] = stats["total_original_bytes"] - stats["total_compressed_bytes"]
+
+    return stats
+
+
 def get_local_disk_usage():
     """Get disk usage for staging directory."""
     try:
@@ -349,6 +393,8 @@ ARCHIVES_HTML = """
         .badge-deletable { background: #fef3c7; color: #92400e; }
         .badge-none { background: #f3f4f6; color: #6b7280; }
         .badge-transferring { background: #d1fae5; color: #065f46; }
+        .badge-archiving { background: #e0e7ff; color: #4338ca; }
+        .badge-archived { background: #d1fae5; color: #047857; }
 
         .transfer-progress {
             display: flex;
@@ -614,6 +660,16 @@ ARCHIVES_HTML = """
             <div class="summary-value">{{ total_size_gb }} GB</div>
             <div class="summary-label">Total Size</div>
         </div>
+        {% if archived_stats.total_archived > 0 %}
+        <div class="summary-stat">
+            <div class="summary-value">{{ archived_stats.total_archived }}</div>
+            <div class="summary-label">Compressed Archives</div>
+        </div>
+        <div class="summary-stat">
+            <div class="summary-value">{{ "%.1f"|format(archived_stats.space_saved_bytes / 1024 / 1024 / 1024) }} GB</div>
+            <div class="summary-label">Space Saved ({{ "%.0f"|format((1 - archived_stats.average_ratio) * 100) }}%)</div>
+        </div>
+        {% endif %}
         <div class="summary-stat">
             <div class="summary-value">{{ disk_usage.available }}</div>
             <div class="summary-label">Available ({{ disk_usage.percent }}% used)</div>
@@ -684,6 +740,10 @@ ARCHIVES_HTML = """
                                         <div class="progress-bar-fill" style="width: 0%;"></div>
                                     </div>
                                 </div>
+                                {% elif archive.state == 'archiving' %}
+                                <span class="badge badge-archiving">archiving...</span>
+                                {% elif archive.state == 'archived' %}
+                                <span class="badge badge-archived">archived</span>
                                 {% elif archive.state %}
                                 <span class="badge badge-state">{{ archive.state }}</span>
                                 {% elif archive.deletable %}
@@ -975,6 +1035,9 @@ def archives_page():
     disk_usage = get_local_disk_usage()
     hostname = socket.gethostname().split('.')[0]
 
+    # Get archived (compressed) stats
+    archived_stats = get_archived_stats()
+
     # Get peer status if clustered
     peers = []
     if config["cluster_enabled"]:
@@ -1022,6 +1085,7 @@ def archives_page():
         cluster_enabled=config["cluster_enabled"],
         node_name=config["node_name"],
         peers=peers,
+        archived_stats=archived_stats,
         format_size=format_size,
         pipeline_version=pipeline_version,
         dashboard_version=dashboard_version,

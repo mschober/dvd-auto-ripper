@@ -295,6 +295,58 @@ PREVIEW_START_PERCENT="25"
 PREVIEW_RESOLUTION="640:360"
 
 # ============================================================================
+# ISO Archival Configuration
+# ============================================================================
+# Long-term archival of ISOs using lossless compression. After encoding
+# completes, the ISO can be compressed for storage, allowing recreation of
+# MKVs if needed. Archives are transferred to NAS for long-term storage.
+#
+# Archive pipeline:
+#   ISO.deletable → xz compress → par2 recovery → transfer to NAS → delete local
+#
+# Uses xz (LZMA2) compression with CRC64 integrity checks and optional
+# par2 recovery files for bit rot protection.
+
+# Enable ISO archival compression (0=disabled, 1=enabled)
+# When enabled, ISOs marked .deletable are compressed and archived to NAS
+# Default: disabled - enable only if you want to preserve ISOs long-term
+ENABLE_ISO_ARCHIVAL="0"
+
+# Compression level (1-9, 9=best compression, slowest)
+# Level 9 with extreme mode provides best ratio for DVD ISOs
+# Typical compression: 40-60% of original size
+ISO_COMPRESSION_LEVEL="9"
+
+# Compression threads (0=auto/all cores)
+# xz scales well across cores for large files
+ISO_COMPRESSION_THREADS="0"
+
+# Enable PAR2 recovery files (0=disabled, 1=enabled)
+# Creates redundancy data for bit rot protection
+ENABLE_PAR2_RECOVERY="1"
+
+# PAR2 redundancy percentage (5-15 recommended)
+# 5% = ~5% storage overhead, can recover from ~2.5% corruption
+# 10% = ~10% storage overhead, can recover from ~5% corruption
+PAR2_REDUNDANCY_PERCENT="5"
+
+# NAS archive path (separate from video library)
+# Where compressed ISOs are stored long-term
+# Example: NAS_ARCHIVE_PATH="/volume1/Archives/dvd-isos"
+NAS_ARCHIVE_PATH=""
+
+# Delete original ISO after successful archive (0=keep, 1=delete)
+# Only deletes if archive + verification + transfer all succeed
+DELETE_ISO_AFTER_ARCHIVE="1"
+
+# Delete local .xz file after transfer to NAS (0=keep, 1=delete)
+# Set to 0 to keep local copies as well
+DELETE_LOCAL_XZ_AFTER_ARCHIVE="1"
+
+# Archive lock file
+ARCHIVE_LOCK_FILE="/run/dvd-ripper/archive.lock"
+
+# ============================================================================
 # Advanced Options
 # ============================================================================
 

@@ -7,7 +7,8 @@ from math import ceil
 # Constants
 STAGING_DIR = os.environ.get("STAGING_DIR", "/var/tmp/dvd-rips")
 STATE_ORDER = ["iso-creating", "iso-ready", "distributing", "encoding",
-               "encoded-ready", "transferring", "transferred"]
+               "encoded-ready", "transferring", "transferred",
+               "archiving", "archived"]
 QUEUE_ITEMS_PER_PAGE = 10
 
 

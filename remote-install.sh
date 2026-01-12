@@ -188,7 +188,7 @@ check_dependencies() {
     print_info "Checking dependencies..."
 
     # Required dependencies
-    local deps=("HandBrakeCLI" "rsync" "ssh" "eject" "ffmpeg" "ddrescue" "python3" "curl" "jq")
+    local deps=("HandBrakeCLI" "rsync" "ssh" "eject" "ffmpeg" "ddrescue" "python3" "curl" "jq" "xz" "par2")
 
     for cmd in "${deps[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
@@ -201,10 +201,10 @@ check_dependencies() {
         print_info ""
         print_info "Install them with:"
         print_info "  Debian/Ubuntu:"
-        print_info "    sudo apt-get install handbrake-cli rsync openssh-client eject ffmpeg gddrescue curl jq"
+        print_info "    sudo apt-get install handbrake-cli rsync openssh-client eject ffmpeg gddrescue curl jq xz-utils par2"
         print_info ""
         print_info "  RHEL/CentOS/Fedora:"
-        print_info "    sudo yum install handbrake-cli rsync openssh-clients eject ffmpeg ddrescue curl jq"
+        print_info "    sudo yum install handbrake-cli rsync openssh-clients eject ffmpeg ddrescue curl jq xz par2cmdline"
         print_info ""
         exit 1
     fi
@@ -675,12 +675,13 @@ install_scripts() {
     cp "$SCRIPT_DIR/scripts/dvd-ripper-trigger-resume.sh" "$INSTALL_BIN/"
     cp "$SCRIPT_DIR/scripts/dvd-dashboard-ctl.sh" "$INSTALL_BIN/"
 
-    # Copy pipeline scripts (3-stage mode + cluster distribution)
+    # Copy pipeline scripts (3-stage mode + cluster distribution + archival)
     cp "$SCRIPT_DIR/scripts/dvd-iso.sh" "$INSTALL_BIN/"
     cp "$SCRIPT_DIR/scripts/dvd-encoder.sh" "$INSTALL_BIN/"
     cp "$SCRIPT_DIR/scripts/dvd-transfer.sh" "$INSTALL_BIN/"
     cp "$SCRIPT_DIR/scripts/dvd-distribute.sh" "$INSTALL_BIN/"
     cp "$SCRIPT_DIR/scripts/dvd-audit.sh" "$INSTALL_BIN/"
+    cp "$SCRIPT_DIR/scripts/dvd-archive.sh" "$INSTALL_BIN/"
 
     # Copy VERSION file for pipeline version tracking
     if [[ -f "$SCRIPT_DIR/scripts/VERSION" ]]; then
@@ -701,6 +702,7 @@ install_scripts() {
     chmod 755 "$INSTALL_BIN/dvd-transfer.sh"
     chmod 755 "$INSTALL_BIN/dvd-distribute.sh"
     chmod 755 "$INSTALL_BIN/dvd-audit.sh"
+    chmod 755 "$INSTALL_BIN/dvd-archive.sh"
     chmod 644 "$INSTALL_BIN/dvd-utils.sh"
 
     print_info "✓ Scripts installed successfully"
@@ -710,6 +712,7 @@ install_scripts() {
     print_info "  - dvd-distribute.sh (pipeline stage 2a: cluster distribution)"
     print_info "  - dvd-audit.sh (hourly audit for suspicious MKVs)"
     print_info "  - dvd-transfer.sh (pipeline stage 3: NAS transfer)"
+    print_info "  - dvd-archive.sh (pipeline stage 4: ISO archival)"
 }
 
 install_config() {
@@ -825,8 +828,9 @@ create_directories() {
         [encoder]="dvd-encode"
         [transfer]="dvd-transfer"
         [distribute]="dvd-distribute"
+        [archive]="dvd-transfer"
     )
-    for log_name in iso encoder transfer distribute; do
+    for log_name in iso encoder transfer distribute archive; do
         local log_file="${log_dir}/${log_name}.log"
         local owner="${log_owners[$log_name]}"
         if [[ ! -f "$log_file" ]]; then
@@ -836,7 +840,7 @@ create_directories() {
         chown "${owner}:dvd-ripper" "$log_file"
     done
     print_info "✓ Log directory: $log_dir (mode 770, group dvd-ripper)"
-    print_info "  Log files: iso.log, encoder.log, transfer.log, distribute.log"
+    print_info "  Log files: iso.log, encoder.log, transfer.log, distribute.log, archive.log"
 
     # Create runtime directory for lock files
     local run_dir="/run/dvd-ripper"
@@ -954,6 +958,21 @@ install_pipeline_timers() {
         print_warn "dvd-audit.timer not found, skipping"
     fi
 
+    # Install archive service and timer (ISO archival compression)
+    if [[ -f "$SCRIPT_DIR/config/dvd-archive.service" ]]; then
+        cp "$SCRIPT_DIR/config/dvd-archive.service" "$systemd_dir/"
+        chmod 644 "$systemd_dir/dvd-archive.service"
+    else
+        print_warn "dvd-archive.service not found, skipping"
+    fi
+
+    if [[ -f "$SCRIPT_DIR/config/dvd-archive.timer" ]]; then
+        cp "$SCRIPT_DIR/config/dvd-archive.timer" "$systemd_dir/"
+        chmod 644 "$systemd_dir/dvd-archive.timer"
+    else
+        print_warn "dvd-archive.timer not found, skipping"
+    fi
+
     # Install udev control service (for pause/resume via dashboard)
     if [[ -f "$SCRIPT_DIR/config/dvd-udev-control@.service" ]]; then
         cp "$SCRIPT_DIR/config/dvd-udev-control@.service" "$systemd_dir/"
@@ -989,6 +1008,12 @@ install_pipeline_timers() {
         systemctl enable dvd-audit.timer
         systemctl start dvd-audit.timer
         print_info "✓ dvd-audit.timer enabled and started (runs hourly)"
+    fi
+
+    if [[ -f "$systemd_dir/dvd-archive.timer" ]]; then
+        systemctl enable dvd-archive.timer
+        systemctl start dvd-archive.timer
+        print_info "✓ dvd-archive.timer enabled and started (runs every 30 min)"
     fi
 
     print_info "✓ Pipeline timers installed"
@@ -1291,6 +1316,12 @@ test_installation() {
         print_warn "⚠ dvd-transfer.sh not installed"
     fi
 
+    if [[ -x "$INSTALL_BIN/dvd-archive.sh" ]]; then
+        print_info "✓ dvd-archive.sh installed (pipeline stage 4)"
+    else
+        print_warn "⚠ dvd-archive.sh not installed"
+    fi
+
     # Check pipeline timers
     if systemctl is-enabled dvd-encoder.timer &>/dev/null; then
         print_info "✓ dvd-encoder.timer enabled"
@@ -1302,6 +1333,12 @@ test_installation() {
         print_info "✓ dvd-transfer.timer enabled"
     else
         print_warn "⚠ dvd-transfer.timer not enabled"
+    fi
+
+    if systemctl is-enabled dvd-archive.timer &>/dev/null; then
+        print_info "✓ dvd-archive.timer enabled (ISO archival)"
+    else
+        print_warn "⚠ dvd-archive.timer not enabled"
     fi
 
     # Check libdvdcss

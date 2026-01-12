@@ -1,0 +1,47 @@
+[Unit]
+Description=DVD Archive Service (Pipeline Stage 4 - ISO Compression)
+Documentation=https://github.com/mschober/dvd-auto-ripper
+After=network.target
+# Refuse to start if archive is already running (lock file exists)
+ConditionPathExists=!/run/dvd-ripper/archive.lock
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/dvd-archive.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dvd-archive
+
+# User isolation - run as dvd-transfer user (needs NAS access for archive transfer)
+User=dvd-transfer
+Group=dvd-ripper
+
+# Runtime directory for lock files (created automatically)
+# Mode 0775 allows all dvd-ripper group members to write lock files
+RuntimeDirectory=dvd-ripper
+RuntimeDirectoryMode=0775
+RuntimeDirectoryPreserve=yes
+
+# Resource limits - xz compression is CPU intensive
+# Allow full CPU for compression (it's already single-process limited by lock)
+CPUQuota=90%
+MemoryMax=4G
+TasksMax=128
+IOWeight=20
+Nice=15
+
+# Long timeout for compression + transfer (8 hours max for large ISOs)
+TimeoutStartSec=8h
+
+# Security hardening
+# Note: Using 'true' instead of 'strict' to avoid mount namespace issues
+# Note: PrivateTmp disabled - staging dir must be shared between pipeline stages
+# Note: ProtectHome=read-only allows reading SSH keys for NAS transfer
+# Note: PrivateNetwork disabled - needs network for NAS transfer
+ProtectSystem=true
+ProtectHome=read-only
+NoNewPrivileges=yes
+PrivateDevices=true
+
+[Install]
+WantedBy=multi-user.target

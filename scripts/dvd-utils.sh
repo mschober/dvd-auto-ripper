@@ -1515,3 +1515,307 @@ build_state_metadata() {
 }
 EOF
 }
+
+# ============================================================================
+# ISO Archival Compression Functions
+# ============================================================================
+
+# Default archival configuration
+ENABLE_ISO_ARCHIVAL="${ENABLE_ISO_ARCHIVAL:-0}"
+ISO_COMPRESSION_LEVEL="${ISO_COMPRESSION_LEVEL:-9}"
+ISO_COMPRESSION_THREADS="${ISO_COMPRESSION_THREADS:-0}"
+ENABLE_PAR2_RECOVERY="${ENABLE_PAR2_RECOVERY:-1}"
+PAR2_REDUNDANCY_PERCENT="${PAR2_REDUNDANCY_PERCENT:-5}"
+NAS_ARCHIVE_PATH="${NAS_ARCHIVE_PATH:-}"
+DELETE_ISO_AFTER_ARCHIVE="${DELETE_ISO_AFTER_ARCHIVE:-1}"
+DELETE_LOCAL_XZ_AFTER_ARCHIVE="${DELETE_LOCAL_XZ_AFTER_ARCHIVE:-1}"
+
+# Log file for archive stage
+LOG_FILE_ARCHIVE="${LOG_DIR}/archive.log"
+
+# Compress an ISO file using xz (LZMA2 compression)
+# Usage: compress_iso ISO_PATH
+# Returns: 0 on success, 1 on failure
+# Creates: ISO_PATH.xz with CRC64 integrity check
+compress_iso() {
+    local iso_path="$1"
+    local level="${ISO_COMPRESSION_LEVEL:-9}"
+    local threads="${ISO_COMPRESSION_THREADS:-0}"
+
+    if [[ ! -f "$iso_path" ]]; then
+        log_error "ISO file not found: $iso_path"
+        return 1
+    fi
+
+    # Check if xz is available
+    if ! command -v xz &>/dev/null; then
+        log_error "xz not found. Install with: sudo apt-get install xz-utils"
+        return 1
+    fi
+
+    local iso_size=$(stat -c%s "$iso_path" 2>/dev/null)
+    local iso_size_gb=$(awk "BEGIN {printf \"%.2f\", $iso_size / 1024 / 1024 / 1024}")
+    log_info "Compressing ISO: $iso_path (${iso_size_gb}GB)"
+    log_info "Compression settings: level=$level, threads=$threads"
+
+    local start_time=$(date +%s)
+
+    # xz compression with:
+    # -${level}e = extreme compression at specified level
+    # --threads=$threads = parallel compression (0=auto)
+    # --keep = preserve original file
+    # --check=crc64 = strong integrity verification
+    if xz -${level}e --threads="$threads" --keep --check=crc64 "$iso_path" 2>> "$(get_stage_log_file)"; then
+        local end_time=$(date +%s)
+        local duration=$((end_time - start_time))
+        local xz_path="${iso_path}.xz"
+
+        if [[ -f "$xz_path" ]]; then
+            local xz_size=$(stat -c%s "$xz_path" 2>/dev/null)
+            local xz_size_gb=$(awk "BEGIN {printf \"%.2f\", $xz_size / 1024 / 1024 / 1024}")
+            local ratio=$(awk "BEGIN {printf \"%.2f\", $xz_size / $iso_size}")
+
+            log_info "Compression complete in ${duration}s"
+            log_info "Original: ${iso_size_gb}GB -> Compressed: ${xz_size_gb}GB (ratio: $ratio)"
+            return 0
+        else
+            log_error "Compression completed but output file not found: $xz_path"
+            return 1
+        fi
+    else
+        log_error "xz compression failed for: $iso_path"
+        return 1
+    fi
+}
+
+# Verify a compressed ISO file integrity
+# Usage: verify_compressed_iso XZ_PATH
+# Returns: 0 if valid, 1 if corrupted or missing
+verify_compressed_iso() {
+    local xz_path="$1"
+
+    if [[ ! -f "$xz_path" ]]; then
+        log_error "Compressed file not found: $xz_path"
+        return 1
+    fi
+
+    log_info "Verifying compressed file integrity: $xz_path"
+
+    # xz -t tests the archive integrity without decompressing
+    if xz -t "$xz_path" 2>> "$(get_stage_log_file)"; then
+        log_info "Integrity verification passed: $xz_path"
+        return 0
+    else
+        log_error "Integrity verification FAILED: $xz_path"
+        return 1
+    fi
+}
+
+# Generate PAR2 recovery files for a compressed ISO
+# Usage: generate_recovery_files XZ_PATH
+# Returns: 0 on success, 1 on failure
+# Creates: XZ_PATH.par2 and XZ_PATH.volXXX+XXX.par2 files
+generate_recovery_files() {
+    local xz_path="$1"
+    local redundancy="${PAR2_REDUNDANCY_PERCENT:-5}"
+
+    if [[ ! -f "$xz_path" ]]; then
+        log_error "Compressed file not found: $xz_path"
+        return 1
+    fi
+
+    # Check if par2 is available
+    if ! command -v par2 &>/dev/null; then
+        log_error "par2 not found. Install with: sudo apt-get install par2"
+        return 1
+    fi
+
+    log_info "Generating PAR2 recovery files for: $xz_path (${redundancy}% redundancy)"
+
+    local start_time=$(date +%s)
+
+    # par2 create with:
+    # -r${redundancy} = percentage of recovery data
+    # -n1 = single recovery file (simpler for archiving)
+    if par2 create -r"$redundancy" -n1 "$xz_path" 2>> "$(get_stage_log_file)"; then
+        local end_time=$(date +%s)
+        local duration=$((end_time - start_time))
+
+        # Count created par2 files
+        local par2_count=$(ls -1 "${xz_path}"*.par2 2>/dev/null | wc -l)
+        log_info "PAR2 creation complete in ${duration}s ($par2_count files)"
+        return 0
+    else
+        log_error "PAR2 creation failed for: $xz_path"
+        return 1
+    fi
+}
+
+# Find ISOs that are ready for archiving
+# Archivable ISOs are marked .deletable and don't have .archived state
+# Usage: find_archivable_isos
+# Returns: list of ISO paths (one per line)
+find_archivable_isos() {
+    local staging_dir="${STAGING_DIR:-/var/tmp/dvd-rips}"
+
+    # Find .deletable files
+    find "$staging_dir" -maxdepth 1 -name "*.deletable" -type f 2>/dev/null | while read -r deletable_file; do
+        # Extract base name (remove .deletable suffix)
+        local base="${deletable_file%.deletable}"
+        local iso_path="${base}"
+
+        # Check if ISO exists
+        if [[ ! -f "$iso_path" ]]; then
+            log_debug "ISO not found for deletable marker: $iso_path"
+            continue
+        fi
+
+        # Check if already archived (skip if .archived state exists)
+        local title_timestamp=$(basename "$base")
+        local archived_state="${staging_dir}/${title_timestamp}.archived"
+        if [[ -f "$archived_state" ]]; then
+            log_debug "Already archived, skipping: $iso_path"
+            continue
+        fi
+
+        # Check if currently archiving (skip if .archiving state exists)
+        local archiving_state="${staging_dir}/${title_timestamp}.archiving"
+        if [[ -f "$archiving_state" ]]; then
+            log_debug "Currently archiving, skipping: $iso_path"
+            continue
+        fi
+
+        echo "$iso_path"
+    done
+}
+
+# Transfer archive files to NAS
+# Usage: transfer_archive_to_nas XZ_PATH
+# Returns: 0 on success, 1 on failure
+# Transfers: .xz file and all .par2 files
+transfer_archive_to_nas() {
+    local xz_path="$1"
+    local archive_path="${NAS_ARCHIVE_PATH:-}"
+
+    if [[ -z "$archive_path" ]]; then
+        log_error "NAS_ARCHIVE_PATH not configured"
+        return 1
+    fi
+
+    if [[ -z "$NAS_HOST" ]] || [[ -z "$NAS_USER" ]]; then
+        log_error "NAS configuration incomplete (NAS_HOST or NAS_USER missing)"
+        return 1
+    fi
+
+    if [[ ! -f "$xz_path" ]]; then
+        log_error "Compressed file not found: $xz_path"
+        return 1
+    fi
+
+    log_info "Transferring archive to NAS: $xz_path -> ${NAS_HOST}:${archive_path}"
+
+    # Build file list: .xz and all .par2 files
+    local files_to_transfer=("$xz_path")
+    for par2_file in "${xz_path}"*.par2; do
+        [[ -f "$par2_file" ]] && files_to_transfer+=("$par2_file")
+    done
+
+    log_info "Transferring ${#files_to_transfer[@]} files to NAS archive"
+
+    # Build SSH options with identity file if configured
+    local ssh_opts=""
+    if [[ -n "${NAS_SSH_IDENTITY:-}" ]] && [[ -f "$NAS_SSH_IDENTITY" ]]; then
+        ssh_opts="-i $NAS_SSH_IDENTITY"
+    fi
+
+    local remote_dest="${NAS_USER}@${NAS_HOST}:${archive_path}/"
+
+    # Transfer using rsync
+    if [[ -n "$ssh_opts" ]]; then
+        rsync -avz --progress -e "ssh $ssh_opts" "${files_to_transfer[@]}" "$remote_dest" >> "$(get_stage_log_file)" 2>&1
+    else
+        rsync -avz --progress "${files_to_transfer[@]}" "$remote_dest" >> "$(get_stage_log_file)" 2>&1
+    fi
+
+    if [[ $? -eq 0 ]]; then
+        log_info "Archive transfer to NAS successful"
+
+        # Verify remote files exist
+        local xz_basename=$(basename "$xz_path")
+        local remote_check
+        if [[ -n "$ssh_opts" ]]; then
+            remote_check=$(ssh $ssh_opts "${NAS_USER}@${NAS_HOST}" "ls -la \"${archive_path}/${xz_basename}\" 2>/dev/null")
+        else
+            remote_check=$(ssh "${NAS_USER}@${NAS_HOST}" "ls -la \"${archive_path}/${xz_basename}\" 2>/dev/null")
+        fi
+
+        if [[ -n "$remote_check" ]]; then
+            log_info "Remote file verification passed"
+            return 0
+        else
+            log_error "Remote file not found after transfer: ${archive_path}/${xz_basename}"
+            return 1
+        fi
+    else
+        log_error "Archive transfer to NAS failed"
+        return 1
+    fi
+}
+
+# Build JSON metadata for archived state file
+# Usage: build_archive_metadata TITLE TIMESTAMP ISO_PATH XZ_PATH NAS_PATH COMPRESSION_TIME
+# Returns: JSON string
+build_archive_metadata() {
+    local title="$1"
+    local timestamp="$2"
+    local iso_path="$3"
+    local xz_path="$4"
+    local nas_path="$5"
+    local compression_time="$6"
+    local archived_at=$(date -Iseconds)
+
+    # Calculate sizes
+    local original_size=0
+    local compressed_size=0
+    local ratio="0.00"
+
+    if [[ -f "$iso_path" ]]; then
+        original_size=$(stat -c%s "$iso_path" 2>/dev/null || echo "0")
+    fi
+
+    if [[ -f "$xz_path" ]]; then
+        compressed_size=$(stat -c%s "$xz_path" 2>/dev/null || echo "0")
+    fi
+
+    if [[ "$original_size" -gt 0 ]]; then
+        ratio=$(awk "BEGIN {printf \"%.4f\", $compressed_size / $original_size}")
+    fi
+
+    # List par2 files
+    local par2_files=""
+    for par2_file in "${xz_path}"*.par2; do
+        if [[ -f "$par2_file" ]]; then
+            local par2_basename=$(basename "$par2_file")
+            if [[ -n "$par2_files" ]]; then
+                par2_files="${par2_files}, \"${par2_basename}\""
+            else
+                par2_files="\"${par2_basename}\""
+            fi
+        fi
+    done
+
+    cat <<EOF
+{
+  "title": "$title",
+  "timestamp": "$timestamp",
+  "original_iso": "$iso_path",
+  "original_size_bytes": $original_size,
+  "compressed_size_bytes": $compressed_size,
+  "compression_ratio": $ratio,
+  "compression_time_seconds": $compression_time,
+  "archive_path": "$nas_path",
+  "par2_files": [$par2_files],
+  "archived_at": "$archived_at"
+}
+EOF
+}
