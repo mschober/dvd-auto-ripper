@@ -135,9 +135,15 @@ return_remote_job() {
         rm -f "$iso_path"
         log_debug "[TRANSFER] Removed local ISO: $iso_path"
     fi
+    # Remove archive-ready marker if it exists
+    if [[ -f "${iso_path}.archive-ready" ]]; then
+        rm -f "${iso_path}.archive-ready"
+        log_debug "[TRANSFER] Removed local archive marker"
+    fi
+    # Legacy: remove .deletable if it exists
     if [[ -f "${iso_path}.deletable" ]]; then
         rm -f "${iso_path}.deletable"
-        log_debug "[TRANSFER] Removed local ISO.deletable"
+        log_debug "[TRANSFER] Removed local ISO.deletable (legacy)"
     fi
 
     # Remove state file - job is done on this node
@@ -276,18 +282,25 @@ transfer_video() {
     fi
 
     if [[ "$transfer_success" == "true" ]]; then
-        # Cleanup ISO.deletable if configured and exists
-        if [[ "$CLEANUP_ISO_AFTER_TRANSFER" == "1" ]]; then
-            local iso_deletable="${iso_path}.deletable"
-            if [[ -f "$iso_deletable" ]]; then
-                log_info "[TRANSFER] Removing ISO: $iso_deletable"
-                rm -f "$iso_deletable"
-            fi
-            # Also try without .deletable suffix (in case it wasn't renamed)
+        # Cleanup ISO if configured and archival is disabled
+        # When archival is enabled, the archive process handles ISO deletion
+        if [[ "$CLEANUP_ISO_AFTER_TRANSFER" == "1" ]] && [[ "${ENABLE_ISO_ARCHIVAL:-0}" != "1" ]]; then
+            # Delete the ISO file
             if [[ -f "$iso_path" ]]; then
                 log_info "[TRANSFER] Removing ISO: $iso_path"
                 rm -f "$iso_path"
             fi
+            # Also remove the archive-ready marker if it exists
+            local archive_marker="${iso_path}.archive-ready"
+            if [[ -f "$archive_marker" ]]; then
+                rm -f "$archive_marker"
+            fi
+            # Legacy: remove .deletable if it exists (migration support)
+            if [[ -f "${iso_path}.deletable" ]]; then
+                rm -f "${iso_path}.deletable"
+            fi
+        elif [[ "${ENABLE_ISO_ARCHIVAL:-0}" == "1" ]]; then
+            log_debug "[TRANSFER] ISO cleanup skipped - archival enabled"
         fi
 
         # Cleanup preview if configured (keep by default for identification)
@@ -474,7 +487,7 @@ main() {
         log_info "[TRANSFER] Starting worker for slot $slot: $(basename "$state_file")"
         transfer_worker "$state_file" "$slot" &
         pids+=($!)
-        ((jobs_started++))
+        ((++jobs_started))
     done
 
     if [[ $jobs_started -eq 0 ]]; then

@@ -267,19 +267,18 @@ encode_iso() {
     # Update metadata with preview path
     metadata=$(build_state_metadata "$sanitized_title" "$year" "$timestamp" "$main_title" "$iso_path" "$output_path" "$preview_path")
 
-    # Mark ISO as deletable (robust - handle missing file gracefully)
-    local iso_deletable="${iso_path}.deletable"
+    # Create archive-ready marker (ISO remains unchanged for archival)
+    local archive_marker="${iso_path}.archive-ready"
     if [[ -f "$iso_path" ]]; then
-        if mv "$iso_path" "$iso_deletable" 2>/dev/null; then
-            log_info "[ENCODER] Marked ISO for cleanup: $iso_deletable"
+        local marker_content="{\"iso_path\": \"$iso_path\", \"marked_at\": \"$(date -Iseconds)\", \"title\": \"$sanitized_title\", \"timestamp\": \"$timestamp\"}"
+        if echo "$marker_content" > "$archive_marker" 2>/dev/null; then
+            chmod 664 "$archive_marker" 2>/dev/null || true
+            log_info "[ENCODER] Marked ISO for archival: $archive_marker"
         else
-            log_warn "[ENCODER] Could not rename ISO to .deletable (may already be renamed)"
+            log_warn "[ENCODER] Could not create archive marker: $archive_marker"
         fi
-        # Also remove mapfile and keys directory if they exist
-        rm -f "${iso_path}.mapfile" 2>/dev/null
-        rm -rf "${iso_path}.keys" 2>/dev/null
     else
-        log_warn "[ENCODER] ISO file not found for cleanup (already deleted?): $iso_path"
+        log_warn "[ENCODER] ISO file not found for archive marking (already deleted?): $iso_path"
     fi
 
     # Transition state: encoding -> encoded-ready
@@ -581,16 +580,16 @@ encode_iso_from_encoding() {
     # Update metadata with preview path
     metadata=$(build_state_metadata "$sanitized_title" "$year" "$timestamp" "$main_title" "$iso_path" "$output_path" "$preview_path")
 
-    # Mark ISO as deletable
-    local iso_deletable="${iso_path}.deletable"
+    # Create archive-ready marker (ISO remains unchanged for archival)
+    local archive_marker="${iso_path}.archive-ready"
     if [[ -f "$iso_path" ]]; then
-        if mv "$iso_path" "$iso_deletable" 2>/dev/null; then
-            log_info "[ENCODER] Marked ISO for cleanup: $iso_deletable"
+        local marker_content="{\"iso_path\": \"$iso_path\", \"marked_at\": \"$(date -Iseconds)\", \"title\": \"$sanitized_title\", \"timestamp\": \"$timestamp\"}"
+        if echo "$marker_content" > "$archive_marker" 2>/dev/null; then
+            chmod 664 "$archive_marker" 2>/dev/null || true
+            log_info "[ENCODER] Marked ISO for archival: $archive_marker"
         else
-            log_warn "[ENCODER] Could not rename ISO to .deletable"
+            log_warn "[ENCODER] Could not create archive marker: $archive_marker"
         fi
-        rm -f "${iso_path}.mapfile" 2>/dev/null
-        rm -rf "${iso_path}.keys" 2>/dev/null
     fi
 
     # Transition state: encoding -> encoded-ready

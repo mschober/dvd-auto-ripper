@@ -187,8 +187,8 @@ check_dependencies() {
 
     print_info "Checking dependencies..."
 
-    # Required dependencies
-    local deps=("HandBrakeCLI" "rsync" "ssh" "eject" "ffmpeg" "ddrescue" "python3" "curl" "jq")
+    # Required dependencies (command -> package name mapping for auto-install)
+    local deps=("HandBrakeCLI" "rsync" "ssh" "eject" "ffmpeg" "ddrescue" "python3" "curl" "jq" "xz" "par2")
 
     for cmd in "${deps[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
@@ -196,15 +196,69 @@ check_dependencies() {
         fi
     done
 
+    # Try to auto-install missing archive dependencies (xz, par2)
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+        local can_auto_install=()
+        local cannot_auto_install=()
+
+        for dep in "${missing_deps[@]}"; do
+            case "$dep" in
+                xz|par2)
+                    can_auto_install+=("$dep")
+                    ;;
+                *)
+                    cannot_auto_install+=("$dep")
+                    ;;
+            esac
+        done
+
+        # Auto-install xz-utils and par2 if missing
+        if [[ ${#can_auto_install[@]} -gt 0 ]]; then
+            print_info "Auto-installing archive dependencies: ${can_auto_install[*]}"
+            if [[ -f /etc/debian_version ]]; then
+                apt-get update -qq
+                for dep in "${can_auto_install[@]}"; do
+                    case "$dep" in
+                        xz)
+                            apt-get install -y xz-utils >/dev/null 2>&1 && print_info "✓ Installed xz-utils" || print_warn "Failed to install xz-utils"
+                            ;;
+                        par2)
+                            apt-get install -y par2 >/dev/null 2>&1 && print_info "✓ Installed par2" || print_warn "Failed to install par2"
+                            ;;
+                    esac
+                done
+            elif [[ -f /etc/redhat-release ]]; then
+                for dep in "${can_auto_install[@]}"; do
+                    case "$dep" in
+                        xz)
+                            yum install -y xz >/dev/null 2>&1 && print_info "✓ Installed xz" || print_warn "Failed to install xz"
+                            ;;
+                        par2)
+                            yum install -y par2cmdline >/dev/null 2>&1 && print_info "✓ Installed par2cmdline" || print_warn "Failed to install par2cmdline"
+                            ;;
+                    esac
+                done
+            fi
+        fi
+
+        # Re-check after auto-install
+        missing_deps=()
+        for cmd in "${deps[@]}"; do
+            if ! command -v "$cmd" &>/dev/null; then
+                missing_deps+=("$cmd")
+            fi
+        done
+    fi
+
     if [[ ${#missing_deps[@]} -gt 0 ]]; then
         print_error "Missing required dependencies: ${missing_deps[*]}"
         print_info ""
         print_info "Install them with:"
         print_info "  Debian/Ubuntu:"
-        print_info "    sudo apt-get install handbrake-cli rsync openssh-client eject ffmpeg gddrescue curl jq"
+        print_info "    sudo apt-get install handbrake-cli rsync openssh-client eject ffmpeg gddrescue curl jq xz-utils par2"
         print_info ""
         print_info "  RHEL/CentOS/Fedora:"
-        print_info "    sudo yum install handbrake-cli rsync openssh-clients eject ffmpeg ddrescue curl jq"
+        print_info "    sudo yum install handbrake-cli rsync openssh-clients eject ffmpeg ddrescue curl jq xz par2cmdline"
         print_info ""
         exit 1
     fi
@@ -675,12 +729,13 @@ install_scripts() {
     cp "$SCRIPT_DIR/scripts/dvd-ripper-trigger-resume.sh" "$INSTALL_BIN/"
     cp "$SCRIPT_DIR/scripts/dvd-dashboard-ctl.sh" "$INSTALL_BIN/"
 
-    # Copy pipeline scripts (3-stage mode + cluster distribution)
+    # Copy pipeline scripts (3-stage mode + cluster distribution + archival)
     cp "$SCRIPT_DIR/scripts/dvd-iso.sh" "$INSTALL_BIN/"
     cp "$SCRIPT_DIR/scripts/dvd-encoder.sh" "$INSTALL_BIN/"
     cp "$SCRIPT_DIR/scripts/dvd-transfer.sh" "$INSTALL_BIN/"
     cp "$SCRIPT_DIR/scripts/dvd-distribute.sh" "$INSTALL_BIN/"
     cp "$SCRIPT_DIR/scripts/dvd-audit.sh" "$INSTALL_BIN/"
+    cp "$SCRIPT_DIR/scripts/dvd-archive.sh" "$INSTALL_BIN/"
 
     # Copy VERSION file for pipeline version tracking
     if [[ -f "$SCRIPT_DIR/scripts/VERSION" ]]; then
@@ -701,6 +756,7 @@ install_scripts() {
     chmod 755 "$INSTALL_BIN/dvd-transfer.sh"
     chmod 755 "$INSTALL_BIN/dvd-distribute.sh"
     chmod 755 "$INSTALL_BIN/dvd-audit.sh"
+    chmod 755 "$INSTALL_BIN/dvd-archive.sh"
     chmod 644 "$INSTALL_BIN/dvd-utils.sh"
 
     print_info "✓ Scripts installed successfully"
@@ -710,6 +766,7 @@ install_scripts() {
     print_info "  - dvd-distribute.sh (pipeline stage 2a: cluster distribution)"
     print_info "  - dvd-audit.sh (hourly audit for suspicious MKVs)"
     print_info "  - dvd-transfer.sh (pipeline stage 3: NAS transfer)"
+    print_info "  - dvd-archive.sh (pipeline stage 4: ISO archival)"
 }
 
 install_config() {
@@ -825,8 +882,9 @@ create_directories() {
         [encoder]="dvd-encode"
         [transfer]="dvd-transfer"
         [distribute]="dvd-distribute"
+        [archive]="dvd-transfer"
     )
-    for log_name in iso encoder transfer distribute; do
+    for log_name in iso encoder transfer distribute archive; do
         local log_file="${log_dir}/${log_name}.log"
         local owner="${log_owners[$log_name]}"
         if [[ ! -f "$log_file" ]]; then
@@ -836,7 +894,7 @@ create_directories() {
         chown "${owner}:dvd-ripper" "$log_file"
     done
     print_info "✓ Log directory: $log_dir (mode 770, group dvd-ripper)"
-    print_info "  Log files: iso.log, encoder.log, transfer.log, distribute.log"
+    print_info "  Log files: iso.log, encoder.log, transfer.log, distribute.log, archive.log"
 
     # Create runtime directory for lock files
     local run_dir="/run/dvd-ripper"
@@ -846,6 +904,16 @@ create_directories() {
     chmod 770 "$run_dir"
     chown root:dvd-ripper "$run_dir"
     print_info "✓ Runtime directory: $run_dir (mode 770, group dvd-ripper)"
+
+    # Create ISO archive directory for compressed ISOs
+    local archive_dir="/var/lib/dvd/archives"
+    if [[ ! -d "$archive_dir" ]]; then
+        mkdir -p "$archive_dir"
+    fi
+    # Set permissions: rwxrws--- (2775) - SGID ensures group inheritance, world readable
+    chmod 2775 "$archive_dir"
+    chown dvd-transfer:dvd-ripper "$archive_dir"
+    print_info "✓ Archive directory: $archive_dir (mode 2775, owner dvd-transfer)"
 
     # Create libdvdcss cache directory (service users have no home dirs)
     local dvdcss_cache="/var/cache/dvdcss"
@@ -954,6 +1022,21 @@ install_pipeline_timers() {
         print_warn "dvd-audit.timer not found, skipping"
     fi
 
+    # Install archive service and timer (ISO archival compression)
+    if [[ -f "$SCRIPT_DIR/config/dvd-archive.service" ]]; then
+        cp "$SCRIPT_DIR/config/dvd-archive.service" "$systemd_dir/"
+        chmod 644 "$systemd_dir/dvd-archive.service"
+    else
+        print_warn "dvd-archive.service not found, skipping"
+    fi
+
+    if [[ -f "$SCRIPT_DIR/config/dvd-archive.timer" ]]; then
+        cp "$SCRIPT_DIR/config/dvd-archive.timer" "$systemd_dir/"
+        chmod 644 "$systemd_dir/dvd-archive.timer"
+    else
+        print_warn "dvd-archive.timer not found, skipping"
+    fi
+
     # Install udev control service (for pause/resume via dashboard)
     if [[ -f "$SCRIPT_DIR/config/dvd-udev-control@.service" ]]; then
         cp "$SCRIPT_DIR/config/dvd-udev-control@.service" "$systemd_dir/"
@@ -989,6 +1072,12 @@ install_pipeline_timers() {
         systemctl enable dvd-audit.timer
         systemctl start dvd-audit.timer
         print_info "✓ dvd-audit.timer enabled and started (runs hourly)"
+    fi
+
+    if [[ -f "$systemd_dir/dvd-archive.timer" ]]; then
+        systemctl enable dvd-archive.timer
+        systemctl start dvd-archive.timer
+        print_info "✓ dvd-archive.timer enabled and started (runs every 30 min)"
     fi
 
     print_info "✓ Pipeline timers installed"
@@ -1291,6 +1380,12 @@ test_installation() {
         print_warn "⚠ dvd-transfer.sh not installed"
     fi
 
+    if [[ -x "$INSTALL_BIN/dvd-archive.sh" ]]; then
+        print_info "✓ dvd-archive.sh installed (pipeline stage 4)"
+    else
+        print_warn "⚠ dvd-archive.sh not installed"
+    fi
+
     # Check pipeline timers
     if systemctl is-enabled dvd-encoder.timer &>/dev/null; then
         print_info "✓ dvd-encoder.timer enabled"
@@ -1302,6 +1397,12 @@ test_installation() {
         print_info "✓ dvd-transfer.timer enabled"
     else
         print_warn "⚠ dvd-transfer.timer not enabled"
+    fi
+
+    if systemctl is-enabled dvd-archive.timer &>/dev/null; then
+        print_info "✓ dvd-archive.timer enabled (ISO archival)"
+    else
+        print_warn "⚠ dvd-archive.timer not enabled"
     fi
 
     # Check libdvdcss

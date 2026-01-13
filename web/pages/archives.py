@@ -70,13 +70,20 @@ def get_iso_archives():
             "iso_path": iso_file,
             "iso_size": iso_size,
             "deletable": deletable,
+            "archive_ready": False,  # New: .archive-ready marker exists
             "mapfile": None,
             "keys_dir": None,
             "keys_count": 0,
             "state_file": None,
             "state": None,
             "metadata": {},
-            "mtime": mtime
+            "mtime": mtime,
+            # Archive-related fields
+            "archiving": False,
+            "archived": False,
+            "compressed_size": 0,
+            "archive_path": "",
+            "archived_at": ""
         }
 
     # Associate metadata files with each archive
@@ -133,6 +140,40 @@ def get_iso_archives():
             except (json.JSONDecodeError, IOError):
                 pass
             break
+
+        # Check for .archive-ready marker (new approach - ISO ready for archival)
+        archive_ready_file = os.path.join(STAGING_DIR, f"{prefix}.iso.archive-ready")
+        if os.path.exists(archive_ready_file):
+            archive["archive_ready"] = True
+            try:
+                with open(archive_ready_file, 'r') as f:
+                    archive["archive_ready_metadata"] = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                pass
+
+        # Check for archiving state (compression in progress)
+        archiving_file = os.path.join(STAGING_DIR, f"{prefix}.archiving")
+        if os.path.exists(archiving_file):
+            archive["archiving"] = True
+            try:
+                with open(archiving_file, 'r') as f:
+                    arch_meta = json.load(f)
+                archive["archiving_started"] = arch_meta.get("started_at", "")
+            except (json.JSONDecodeError, IOError):
+                pass
+
+        # Check for archived state (compression complete)
+        archived_file = os.path.join(STAGING_DIR, f"{prefix}.archived")
+        if os.path.exists(archived_file):
+            archive["archived"] = True
+            try:
+                with open(archived_file, 'r') as f:
+                    arch_meta = json.load(f)
+                archive["compressed_size"] = arch_meta.get("compressed_size_bytes", 0)
+                archive["archive_path"] = arch_meta.get("archive_path", "")
+                archive["archived_at"] = arch_meta.get("archived_at", "")
+            except (json.JSONDecodeError, IOError):
+                pass
 
     return sorted(archives.values(), key=lambda x: x["mtime"], reverse=True)
 
@@ -193,6 +234,50 @@ def format_size(size_bytes):
             return f"{size_bytes:.1f} {unit}"
         size_bytes /= 1024
     return f"{size_bytes:.1f} PB"
+
+
+def get_archived_stats():
+    """Get statistics about compressed ISO archives.
+
+    Returns dict with:
+        - total_archived: count of archived ISOs
+        - total_original_bytes: sum of original ISO sizes
+        - total_compressed_bytes: sum of compressed sizes
+        - average_ratio: average compression ratio
+        - space_saved_bytes: bytes saved through compression
+    """
+    stats = {
+        "total_archived": 0,
+        "total_original_bytes": 0,
+        "total_compressed_bytes": 0,
+        "average_ratio": 0.0,
+        "space_saved_bytes": 0
+    }
+
+    # Find all .archived state files
+    archived_files = glob.glob(os.path.join(STAGING_DIR, "*.archived"))
+
+    for state_file in archived_files:
+        try:
+            with open(state_file, 'r') as f:
+                metadata = json.load(f)
+
+            original_size = metadata.get("original_size_bytes", 0)
+            compressed_size = metadata.get("compressed_size_bytes", 0)
+
+            if original_size > 0:
+                stats["total_archived"] += 1
+                stats["total_original_bytes"] += original_size
+                stats["total_compressed_bytes"] += compressed_size
+        except (json.JSONDecodeError, IOError):
+            continue
+
+    # Calculate averages
+    if stats["total_original_bytes"] > 0:
+        stats["average_ratio"] = stats["total_compressed_bytes"] / stats["total_original_bytes"]
+        stats["space_saved_bytes"] = stats["total_original_bytes"] - stats["total_compressed_bytes"]
+
+    return stats
 
 
 def get_local_disk_usage():
@@ -349,6 +434,25 @@ ARCHIVES_HTML = """
         .badge-deletable { background: #fef3c7; color: #92400e; }
         .badge-none { background: #f3f4f6; color: #6b7280; }
         .badge-transferring { background: #d1fae5; color: #065f46; }
+        .badge-archiving { background: #e0e7ff; color: #4338ca; }
+        .badge-archived { background: #d1fae5; color: #047857; }
+
+        .archive-cell { white-space: nowrap; }
+        .archive-info { display: flex; flex-direction: column; gap: 2px; }
+        .compression-ratio { font-size: 10px; color: #059669; }
+        .btn-archive {
+            background: #e0e7ff;
+            color: #4338ca;
+            padding: 4px 10px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .btn-archive:hover { background: #c7d2fe; }
+        .btn-archive:disabled { opacity: 0.5; cursor: not-allowed; }
 
         .transfer-progress {
             display: flex;
@@ -614,6 +718,16 @@ ARCHIVES_HTML = """
             <div class="summary-value">{{ total_size_gb }} GB</div>
             <div class="summary-label">Total Size</div>
         </div>
+        {% if archived_stats.total_archived > 0 %}
+        <div class="summary-stat">
+            <div class="summary-value">{{ archived_stats.total_archived }}</div>
+            <div class="summary-label">Compressed Archives</div>
+        </div>
+        <div class="summary-stat">
+            <div class="summary-value">{{ "%.1f"|format(archived_stats.space_saved_bytes / 1024 / 1024 / 1024) }} GB</div>
+            <div class="summary-label">Space Saved ({{ "%.0f"|format((1 - archived_stats.average_ratio) * 100) }}%)</div>
+        </div>
+        {% endif %}
         <div class="summary-stat">
             <div class="summary-value">{{ disk_usage.available }}</div>
             <div class="summary-label">Available ({{ disk_usage.percent }}% used)</div>
@@ -654,6 +768,7 @@ ARCHIVES_HTML = """
                             <th>Title</th>
                             <th>Size</th>
                             <th>State</th>
+                            <th>Archive</th>
                             <th>Files</th>
                             <th>Actions</th>
                         </tr>
@@ -686,8 +801,26 @@ ARCHIVES_HTML = """
                                 </div>
                                 {% elif archive.state %}
                                 <span class="badge badge-state">{{ archive.state }}</span>
+                                {% elif archive.archive_ready %}
+                                <span class="badge badge-deletable">archive-ready</span>
                                 {% elif archive.deletable %}
                                 <span class="badge badge-deletable">deletable</span>
+                                {% else %}
+                                <span class="badge badge-none">-</span>
+                                {% endif %}
+                            </td>
+                            <td class="archive-cell">
+                                {% if archive.archiving %}
+                                <span class="badge badge-archiving">compressing...</span>
+                                {% elif archive.archived %}
+                                <div class="archive-info">
+                                    <span class="badge badge-archived">{{ format_size(archive.compressed_size) }}</span>
+                                    <small class="compression-ratio">{{ "%.0f"|format((1 - archive.compressed_size / archive.iso_size) * 100) if archive.iso_size > 0 else 0 }}% saved</small>
+                                </div>
+                                {% elif (archive.archive_ready or archive.deletable) and archive.state not in ['encoding', 'transferring', 'distributing'] %}
+                                <button class="btn btn-archive" onclick="archiveNow('{{ archive.prefix }}')">
+                                    Archive Now
+                                </button>
                                 {% else %}
                                 <span class="badge badge-none">-</span>
                                 {% endif %}
@@ -844,6 +977,31 @@ ARCHIVES_HTML = """
             }
         }
 
+        async function archiveNow(prefix) {
+            const title = prefix.split('-')[0].replace(/_/g, ' ');
+            if (!confirm(`Start archiving "${title}"? This will compress the ISO for long-term storage.`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/archives/archive-now', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prefix })
+                });
+                const result = await response.json();
+
+                if (result.status === 'started') {
+                    showNotification(`Archiving started: ${title}`, 'success');
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    showNotification(result.error || 'Archive failed to start', 'error');
+                }
+            } catch (err) {
+                showNotification('Archive request failed: ' + err.message, 'error');
+            }
+        }
+
         let pendingDeletePrefix = null;
 
         function deleteArchive(prefix) {
@@ -975,6 +1133,9 @@ def archives_page():
     disk_usage = get_local_disk_usage()
     hostname = socket.gethostname().split('.')[0]
 
+    # Get archived (compressed) stats
+    archived_stats = get_archived_stats()
+
     # Get peer status if clustered
     peers = []
     if config["cluster_enabled"]:
@@ -1022,6 +1183,7 @@ def archives_page():
         cluster_enabled=config["cluster_enabled"],
         node_name=config["node_name"],
         peers=peers,
+        archived_stats=archived_stats,
         format_size=format_size,
         pipeline_version=pipeline_version,
         dashboard_version=dashboard_version,
@@ -1204,8 +1366,75 @@ def api_archives_delete(prefix):
         except OSError as e:
             errors.append(f"State: {e}")
 
+    # Delete .archive-ready marker if it exists
+    archive_ready_file = os.path.join(STAGING_DIR, f"{prefix}.iso.archive-ready")
+    if os.path.exists(archive_ready_file):
+        try:
+            os.remove(archive_ready_file)
+            deleted.append(os.path.basename(archive_ready_file))
+        except OSError as e:
+            errors.append(f"Archive-ready marker: {e}")
+
     return jsonify({
         "status": "deleted" if not errors else "partial",
         "deleted": deleted,
         "errors": errors
+    })
+
+
+@archives_bp.route("/api/archives/archive-now", methods=["POST"])
+def api_archives_archive_now():
+    """API: Trigger immediate ISO archival via systemd service.
+
+    Expected JSON:
+    {
+        "prefix": "The_Matrix-1703615234"
+    }
+    """
+    data = request.json or {}
+    prefix = data.get("prefix")
+
+    if not prefix:
+        return jsonify({"error": "Missing prefix"}), 400
+
+    # Verify archive exists and is eligible
+    archives = {a["prefix"]: a for a in get_iso_archives()}
+    if prefix not in archives:
+        return jsonify({"error": "Archive not found"}), 404
+
+    archive = archives[prefix]
+
+    # Check if already archiving or archived
+    if archive.get("archiving"):
+        return jsonify({"error": "Already archiving"}), 400
+    if archive.get("archived"):
+        return jsonify({"error": "Already archived"}), 400
+
+    # Must be archive-ready or deletable (legacy) to archive
+    if not archive.get("archive_ready") and not archive.get("deletable"):
+        return jsonify({"error": "ISO must be marked archive-ready to archive"}), 400
+
+    # Don't archive if actively processing
+    if archive["state"] in ["iso-creating", "encoding", "transferring", "distributing"]:
+        return jsonify({"error": f"Cannot archive: ISO is {archive['state']}"}), 400
+
+    # Trigger the archive service via systemctl
+    try:
+        result = subprocess.run(
+            ["systemctl", "start", "dvd-archive.service"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode != 0:
+            return jsonify({"error": f"Failed to start archive service: {result.stderr}"}), 500
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Timeout starting archive service"}), 500
+    except Exception as e:
+        return jsonify({"error": f"Failed to trigger archive: {e}"}), 500
+
+    return jsonify({
+        "status": "started",
+        "prefix": prefix,
+        "message": "Archive service triggered"
     })

@@ -63,21 +63,23 @@ The system assumes a **separate Plex server + NAS** setup:
 - NAS with built-in Plex (Synology/QNAP with Plex package)
 - Local Plex on the ripper machine (no NAS needed)
 
-### Why a 3-Stage Pipeline?
+### Why a Multi-Stage Pipeline?
 
-The system separates disc handling from encoding and transfer:
+The system separates disc handling from encoding, transfer, and archiving:
 
 | Stage | What Happens | Trigger |
 |-------|--------------|---------|
 | **1. Rip** | Create ISO, eject disc | Disc insertion (udev) |
 | **2. Encode** | Convert ISO → MKV | Timer (every 15 min) |
-| **3. Transfer** | Send to NAS, cleanup | Timer (every 15 min) |
+| **3. Transfer** | Send MKV to NAS | Timer (every 15 min) |
+| **4. Archive** | Compress ISO for long-term storage | Timer (every 30 min) |
 
 **Benefits:**
 - Your DVD drive is free in ~30 minutes (not 2-3 hours)
 - You can keep inserting discs without waiting
 - Encoding failures don't block new rips
 - Power loss? It picks up where it left off
+- ISO archives preserved long-term with 40-60% compression
 
 ## Quick Start
 
@@ -210,6 +212,8 @@ Key settings in `/etc/dvd-ripper.conf`:
 | `HANDBRAKE_PRESET` | `Fast 1080p30` | Encoding quality preset |
 | `HANDBRAKE_QUALITY` | `20` | Quality level (18=high, 22=smaller files) |
 | `GENERATE_PREVIEWS` | `1` | Create preview clips for identification |
+| `ENABLE_ISO_ARCHIVAL` | `0` | Compress ISOs for long-term storage |
+| `NAS_ARCHIVE_PATH` | - | Destination for compressed ISO archives |
 
 See `config/dvd-ripper.conf.example` for all options.
 
@@ -297,6 +301,7 @@ dvd-auto-ripper/
 │   ├── dvd-iso.sh              # Stage 1: Create ISO from DVD
 │   ├── dvd-encoder.sh          # Stage 2: Encode ISO to MKV
 │   ├── dvd-transfer.sh         # Stage 3: Transfer to NAS
+│   ├── dvd-archive.sh          # Stage 4: Compress ISO for archival
 │   ├── dvd-utils.sh            # Shared utility functions
 │   ├── dvd-ripper.sh           # Legacy all-in-one mode
 │   ├── dvd-dashboard-ctl.sh    # Dashboard control script
@@ -307,6 +312,7 @@ dvd-auto-ripper/
 │   ├── dvd-ripper.conf.example # Configuration template
 │   ├── dvd-encoder.timer       # Systemd timer (15 min)
 │   ├── dvd-transfer.timer      # Systemd timer (15 min)
+│   ├── dvd-archive.timer       # Systemd timer (30 min)
 │   ├── dvd-dashboard.service   # Dashboard service
 │   └── 99-dvd-ripper.rules     # udev rule for disc detection
 ├── features/
