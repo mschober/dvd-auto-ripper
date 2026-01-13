@@ -152,6 +152,10 @@ main() {
     # Set device for per-drive logging (enables separate progress tracking)
     CURRENT_DEVICE="$device_name"
 
+    # Clear device-specific log to remove stale progress from previous disc
+    local device_log="${LOG_DIR}/iso-${device_name}.log"
+    : > "$device_log" 2>/dev/null || true
+
     # Initialize
     init_logging || exit 1
     ensure_staging_dir
