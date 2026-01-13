@@ -194,6 +194,10 @@ def get_iso_archives():
 
         archive_path = arch_meta.get("archive_path", "")
 
+        # Strip "local:" prefix if present (legacy format)
+        if archive_path.startswith("local:"):
+            archive_path = archive_path[6:]
+
         # Verify .xz file exists
         if not archive_path or not os.path.exists(archive_path):
             continue
