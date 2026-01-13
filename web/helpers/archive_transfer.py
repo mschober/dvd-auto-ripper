@@ -24,6 +24,7 @@ from helpers.cluster import rsync_files, rsync_directory, confirm_files_on_peer
 
 def do_transfer(state_file: str):
     """Perform the archive transfer based on state file parameters."""
+    import glob as glob_module
 
     # Read state file for parameters
     try:
@@ -33,18 +34,15 @@ def do_transfer(state_file: str):
         print(f"Failed to read state file: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Extract parameters
-    iso_path = state.get("iso_path")
-    mapfile = state.get("mapfile")
-    keys_dir = state.get("keys_dir")
+    # Extract common parameters
     peer_host = state.get("peer_host")
     peer_port = state.get("peer_port")
     peer_name = state.get("peer")
     ssh_user = state.get("ssh_user")
     remote_staging = state.get("remote_staging")
-    iso_size = state.get("iso_size", 0)
+    is_archive_only = state.get("archive_only", False)
 
-    if not iso_path or not peer_host or not ssh_user:
+    if not peer_host or not ssh_user:
         update_state(state_file, "failed", error="Missing required parameters")
         sys.exit(1)
 
@@ -54,70 +52,126 @@ def do_transfer(state_file: str):
     update_state(state_file, "transferring", pid=os.getpid())
 
     try:
-        # Build file list
-        files_to_transfer = [iso_path]
-        if mapfile and os.path.exists(mapfile):
-            files_to_transfer.append(mapfile)
+        if is_archive_only:
+            # Archive-only transfer: .xz file and .par2 recovery files
+            archive_path = state.get("archive_path")
+            if not archive_path or not os.path.exists(archive_path):
+                update_state(state_file, "failed", error="Archive file not found")
+                sys.exit(1)
 
-        # Transfer files via rsync
-        result = rsync_files(files_to_transfer, peer_host, ssh_user, remote_staging)
+            # Build file list: .xz file + any .par2 files
+            files_to_transfer = [archive_path]
+            par2_files = glob_module.glob(archive_path + "*.par2")
+            files_to_transfer.extend(par2_files)
 
-        if not result["success"]:
-            update_state(state_file, "failed", error=result["errors"])
-            sys.exit(1)
+            # Transfer files via rsync
+            result = rsync_files(files_to_transfer, peer_host, ssh_user, remote_staging)
 
-        transferred = result["transferred"]
+            if not result["success"]:
+                update_state(state_file, "failed", error=result["errors"])
+                sys.exit(1)
 
-        # Transfer keys directory if exists
-        if keys_dir and os.path.isdir(keys_dir):
-            keys_result = rsync_directory(keys_dir, peer_host, ssh_user, remote_staging)
-            if keys_result["success"]:
-                transferred.extend(keys_result["transferred"])
+            transferred = result["transferred"]
 
-        # Confirm files arrived on peer
-        filenames_to_confirm = [os.path.basename(f) for f in files_to_transfer]
-        confirm = confirm_files_on_peer(peer_host, peer_port, filenames_to_confirm)
+            # Confirm .xz file arrived on peer
+            filenames_to_confirm = [os.path.basename(archive_path)]
+            confirm = confirm_files_on_peer(peer_host, peer_port, filenames_to_confirm)
 
-        if not confirm["success"]:
-            update_state(state_file, "failed", error=f"Confirmation failed: {confirm.get('error')}")
-            sys.exit(1)
+            if not confirm["success"]:
+                update_state(state_file, "failed", error=f"Confirmation failed: {confirm.get('error')}")
+                sys.exit(1)
 
-        if confirm["missing"]:
-            update_state(state_file, "failed", error=f"Missing files on peer: {confirm['missing']}")
-            sys.exit(1)
+            if confirm["missing"]:
+                update_state(state_file, "failed", error=f"Missing files on peer: {confirm['missing']}")
+                sys.exit(1)
 
-        # Transfer confirmed - delete source files (move semantics)
-        deleted = []
+            # Transfer confirmed - optionally delete source files
+            # For .xz archives, we typically keep the source (don't auto-delete)
+            # The user can manually delete after verifying on peer
 
-        if os.path.exists(iso_path):
+            # Success - remove state file
             try:
-                os.remove(iso_path)
-                deleted.append(os.path.basename(iso_path))
-            except OSError as e:
-                pass  # Non-fatal
-
-        if mapfile and os.path.exists(mapfile):
-            try:
-                os.remove(mapfile)
-                deleted.append(os.path.basename(mapfile))
+                os.remove(state_file)
             except OSError:
                 pass
 
-        if keys_dir and os.path.exists(keys_dir):
+            print(f"Archive transfer complete: {transferred}")
+            sys.exit(0)
+
+        else:
+            # ISO transfer: ISO file + mapfile + keys directory
+            iso_path = state.get("iso_path")
+            mapfile = state.get("mapfile")
+            keys_dir = state.get("keys_dir")
+
+            if not iso_path:
+                update_state(state_file, "failed", error="Missing iso_path parameter")
+                sys.exit(1)
+
+            # Build file list
+            files_to_transfer = [iso_path]
+            if mapfile and os.path.exists(mapfile):
+                files_to_transfer.append(mapfile)
+
+            # Transfer files via rsync
+            result = rsync_files(files_to_transfer, peer_host, ssh_user, remote_staging)
+
+            if not result["success"]:
+                update_state(state_file, "failed", error=result["errors"])
+                sys.exit(1)
+
+            transferred = result["transferred"]
+
+            # Transfer keys directory if exists
+            if keys_dir and os.path.isdir(keys_dir):
+                keys_result = rsync_directory(keys_dir, peer_host, ssh_user, remote_staging)
+                if keys_result["success"]:
+                    transferred.extend(keys_result["transferred"])
+
+            # Confirm files arrived on peer
+            filenames_to_confirm = [os.path.basename(f) for f in files_to_transfer]
+            confirm = confirm_files_on_peer(peer_host, peer_port, filenames_to_confirm)
+
+            if not confirm["success"]:
+                update_state(state_file, "failed", error=f"Confirmation failed: {confirm.get('error')}")
+                sys.exit(1)
+
+            if confirm["missing"]:
+                update_state(state_file, "failed", error=f"Missing files on peer: {confirm['missing']}")
+                sys.exit(1)
+
+            # Transfer confirmed - delete source files (move semantics)
+            deleted = []
+
+            if os.path.exists(iso_path):
+                try:
+                    os.remove(iso_path)
+                    deleted.append(os.path.basename(iso_path))
+                except OSError as e:
+                    pass  # Non-fatal
+
+            if mapfile and os.path.exists(mapfile):
+                try:
+                    os.remove(mapfile)
+                    deleted.append(os.path.basename(mapfile))
+                except OSError:
+                    pass
+
+            if keys_dir and os.path.exists(keys_dir):
+                try:
+                    shutil.rmtree(keys_dir)
+                    deleted.append(os.path.basename(keys_dir))
+                except OSError:
+                    pass
+
+            # Success - remove state file
             try:
-                shutil.rmtree(keys_dir)
-                deleted.append(os.path.basename(keys_dir))
+                os.remove(state_file)
             except OSError:
                 pass
 
-        # Success - remove state file
-        try:
-            os.remove(state_file)
-        except OSError:
-            pass
-
-        print(f"Transfer complete: {transferred}")
-        sys.exit(0)
+            print(f"Transfer complete: {transferred}")
+            sys.exit(0)
 
     except Exception as e:
         update_state(state_file, "failed", error=str(e))

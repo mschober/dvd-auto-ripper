@@ -71,6 +71,7 @@ def get_iso_archives():
             "iso_size": iso_size,
             "deletable": deletable,
             "archive_ready": False,  # New: .archive-ready marker exists
+            "archive_only": False,  # True when ISO deleted but .xz exists
             "mapfile": None,
             "keys_dir": None,
             "keys_count": 0,
@@ -174,6 +175,70 @@ def get_iso_archives():
                 archive["archived_at"] = arch_meta.get("archived_at", "")
             except (json.JSONDecodeError, IOError):
                 pass
+
+    # Find archived-only items (ISO deleted but .archived state file exists with .xz)
+    for archived_file in glob.glob(os.path.join(STAGING_DIR, "*.archived")):
+        basename = os.path.basename(archived_file)
+        prefix = basename.replace(".archived", "")
+
+        # Skip if we already have this as an ISO entry
+        if prefix in archives:
+            continue
+
+        # Read archived metadata
+        try:
+            with open(archived_file, 'r') as f:
+                arch_meta = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            continue
+
+        archive_path = arch_meta.get("archive_path", "")
+
+        # Verify .xz file exists
+        if not archive_path or not os.path.exists(archive_path):
+            continue
+
+        # Get compressed file size and mtime
+        try:
+            compressed_size = os.path.getsize(archive_path)
+            mtime = os.path.getmtime(archive_path)
+        except OSError:
+            continue
+
+        # Create entry for archived-only item
+        archives[prefix] = {
+            "prefix": prefix,
+            "iso_path": None,  # No ISO, only archive
+            "iso_size": arch_meta.get("original_size_bytes", 0),
+            "deletable": False,
+            "archive_ready": False,
+            "archive_only": True,  # Key flag for UI
+            "mapfile": None,
+            "keys_dir": None,
+            "keys_count": 0,
+            "state_file": archived_file,
+            "state": None,
+            "metadata": arch_meta,
+            "mtime": mtime,
+            # Archive-related fields
+            "archiving": False,
+            "archived": True,
+            "compressed_size": compressed_size,
+            "archive_path": archive_path,
+            "archived_at": arch_meta.get("archived_at", "")
+        }
+
+        # Check for xz-transferring state (archive transfer in progress)
+        for transfer_file in glob.glob(os.path.join(STAGING_DIR, f"{prefix}.xz-transferring-to-*")):
+            peer_name = os.path.basename(transfer_file).split('.xz-transferring-to-')[-1]
+            archives[prefix]["state"] = "xz-transferring"
+            archives[prefix]["transfer_peer"] = peer_name
+            try:
+                with open(transfer_file, 'r') as f:
+                    archives[prefix]["transfer_metadata"] = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                pass
+            break
 
     return sorted(archives.values(), key=lambda x: x["mtime"], reverse=True)
 
@@ -417,6 +482,11 @@ ARCHIVES_HTML = """
         .archive-row.dragging { opacity: 0.5; background: #dbeafe; }
         .archive-row[draggable="true"] { cursor: grab; }
         .archive-row[draggable="true"]:active { cursor: grabbing; }
+
+        /* Archived-only rows (ISO deleted, only .xz exists) */
+        .archived-row { background: #f0fdf4; }
+        .archived-row:hover { background: #dcfce7; }
+        .archived-row .size-cell { color: #059669; }
 
         .title-cell { font-weight: 500; }
         .title-cell small { display: block; font-weight: 400; color: #6b7280; font-size: 11px; }
@@ -775,30 +845,39 @@ ARCHIVES_HTML = """
                     </thead>
                     <tbody>
                         {% for archive in archives %}
-                        <tr class="archive-row"
+                        <tr class="archive-row {{ 'archived-row' if archive.archive_only else '' }}"
                             data-prefix="{{ archive.prefix }}"
+                            data-archive-only="{{ 'true' if archive.archive_only else 'false' }}"
                             {% if cluster_enabled %}draggable="true"{% endif %}
                             ondragstart="handleDragStart(event)"
                             ondragend="handleDragEnd(event)">
                             <td class="title-cell">
                                 {{ archive.prefix.rsplit('-', 1)[0] | replace('_', ' ') }}
-                                <small>{{ archive.prefix }}</small>
+                                <small>{{ archive.prefix }}{% if archive.archive_only %} (.xz){% endif %}</small>
                             </td>
-                            <td class="size-cell">{{ format_size(archive.iso_size) }}</td>
+                            <td class="size-cell" {% if archive.archive_only %}title="Original: {{ format_size(archive.iso_size) }}"{% endif %}>
+                                {% if archive.archive_only %}
+                                {{ format_size(archive.compressed_size) }}
+                                {% else %}
+                                {{ format_size(archive.iso_size) }}
+                                {% endif %}
+                            </td>
                             <td>
-                                {% if archive.state == 'archive-transferring' %}
+                                {% if archive.state == 'archive-transferring' or archive.state == 'xz-transferring' %}
                                 <div class="transfer-progress"
                                      data-prefix="{{ archive.prefix }}"
                                      data-peer="{{ archive.transfer_peer }}"
-                                     data-peer-host="{{ archive.metadata.peer_host if archive.metadata else '' }}"
-                                     data-peer-port="{{ archive.metadata.peer_port if archive.metadata else '' }}"
-                                     data-iso-size="{{ archive.iso_size }}">
+                                     data-peer-host="{{ archive.metadata.peer_host if archive.metadata else (archive.transfer_metadata.peer_host if archive.transfer_metadata else '') }}"
+                                     data-peer-port="{{ archive.metadata.peer_port if archive.metadata else (archive.transfer_metadata.peer_port if archive.transfer_metadata else '') }}"
+                                     data-iso-size="{{ archive.compressed_size if archive.archive_only else archive.iso_size }}">
                                     <span class="badge badge-transferring">→ {{ archive.transfer_peer }}</span>
                                     <span class="transfer-percent"></span>
                                     <div class="progress-bar-mini">
                                         <div class="progress-bar-fill" style="width: 0%;"></div>
                                     </div>
                                 </div>
+                                {% elif archive.archive_only %}
+                                <span class="badge badge-archived">archived</span>
                                 {% elif archive.state %}
                                 <span class="badge badge-state">{{ archive.state }}</span>
                                 {% elif archive.archive_ready %}
@@ -826,15 +905,19 @@ ARCHIVES_HTML = """
                                 {% endif %}
                             </td>
                             <td class="files-cell">
+                                {% if archive.archive_only %}
+                                <span class="file-present" title="{{ archive.archive_path }}">XZ</span>
+                                {% else %}
                                 <span class="{{ 'file-present' if archive.mapfile else 'file-missing' }}"
                                       title="Recovery mapfile">MAP</span>
                                 <span class="{{ 'file-present' if archive.keys_dir else 'file-missing' }}"
                                       title="CSS decryption keys">KEYS{% if archive.keys_count %}({{ archive.keys_count }}){% endif %}</span>
+                                {% endif %}
                             </td>
                             <td class="actions-cell">
                                 <button class="btn btn-delete"
                                         onclick="deleteArchive('{{ archive.prefix }}')"
-                                        {% if archive.state in ['iso-creating', 'encoding', 'transferring', 'distributing', 'archive-transferring'] %}
+                                        {% if archive.state in ['iso-creating', 'encoding', 'transferring', 'distributing', 'archive-transferring', 'xz-transferring'] %}
                                         disabled title="Cannot delete: {{ archive.state }}"
                                         {% endif %}>
                                     Delete
@@ -1251,7 +1334,7 @@ def api_archives_transfer():
     archive = archives[prefix]
 
     # Don't transfer if actively processing or already transferring
-    if archive["state"] in ["iso-creating", "encoding", "transferring", "distributing", "archive-transferring"]:
+    if archive["state"] in ["iso-creating", "encoding", "transferring", "distributing", "archive-transferring", "xz-transferring"]:
         return jsonify({"error": f"Cannot transfer: archive is {archive['state']}"}), 400
 
     # Parse peer
@@ -1265,21 +1348,41 @@ def api_archives_transfer():
     ssh_user = config["ssh_user"]
     remote_staging = config["remote_staging"]
 
+    # Determine if this is an archived-only transfer (.xz file) or ISO transfer
+    is_archive_only = archive.get("archive_only", False)
+
     # Create state file with all parameters for subprocess
-    state_file = os.path.join(STAGING_DIR, f"{prefix}.archive-transferring-to-{peer_name}")
-    state_data = {
-        "status": "pending",
-        "peer": peer_name,
-        "peer_host": peer_host,
-        "peer_port": peer_port,
-        "iso_path": archive["iso_path"],
-        "mapfile": archive.get("mapfile"),
-        "keys_dir": archive.get("keys_dir"),
-        "iso_size": archive["iso_size"],
-        "ssh_user": ssh_user,
-        "remote_staging": remote_staging,
-        "started": time.time()
-    }
+    if is_archive_only:
+        state_file = os.path.join(STAGING_DIR, f"{prefix}.xz-transferring-to-{peer_name}")
+        state_data = {
+            "status": "pending",
+            "peer": peer_name,
+            "peer_host": peer_host,
+            "peer_port": peer_port,
+            "archive_only": True,
+            "archive_path": archive["archive_path"],
+            "compressed_size": archive["compressed_size"],
+            "original_size": archive["iso_size"],
+            "ssh_user": ssh_user,
+            "remote_staging": remote_staging,
+            "started": time.time()
+        }
+    else:
+        state_file = os.path.join(STAGING_DIR, f"{prefix}.archive-transferring-to-{peer_name}")
+        state_data = {
+            "status": "pending",
+            "peer": peer_name,
+            "peer_host": peer_host,
+            "peer_port": peer_port,
+            "archive_only": False,
+            "iso_path": archive["iso_path"],
+            "mapfile": archive.get("mapfile"),
+            "keys_dir": archive.get("keys_dir"),
+            "iso_size": archive["iso_size"],
+            "ssh_user": ssh_user,
+            "remote_staging": remote_staging,
+            "started": time.time()
+        }
     try:
         with open(state_file, 'w') as f:
             json.dump(state_data, f)
@@ -1328,14 +1431,33 @@ def api_archives_delete(prefix):
     archive = archives[prefix]
 
     # Safety check: don't delete if actively being processed
-    if archive["state"] in ["iso-creating", "encoding", "transferring", "distributing", "archive-transferring"]:
+    if archive["state"] in ["iso-creating", "encoding", "transferring", "distributing", "archive-transferring", "xz-transferring"]:
         return jsonify({"error": f"Cannot delete: archive is {archive['state']}"}), 400
 
     deleted = []
     errors = []
 
-    # Delete ISO file
-    if os.path.exists(archive["iso_path"]):
+    # Handle archived-only items (delete .xz and .par2 files)
+    if archive.get("archive_only"):
+        archive_path = archive.get("archive_path")
+        if archive_path and os.path.exists(archive_path):
+            try:
+                os.remove(archive_path)
+                deleted.append(os.path.basename(archive_path))
+            except OSError as e:
+                errors.append(f"Archive: {e}")
+
+            # Delete associated .par2 files
+            par2_files = glob.glob(archive_path + "*.par2")
+            for par2_file in par2_files:
+                try:
+                    os.remove(par2_file)
+                    deleted.append(os.path.basename(par2_file))
+                except OSError as e:
+                    errors.append(f"PAR2: {e}")
+
+    # Delete ISO file (for non-archived-only items)
+    elif archive["iso_path"] and os.path.exists(archive["iso_path"]):
         try:
             os.remove(archive["iso_path"])
             deleted.append(os.path.basename(archive["iso_path"]))
