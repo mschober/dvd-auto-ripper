@@ -1,0 +1,460 @@
+/* DVD Ripper Dashboard - Consolidated Styles */
+
+/* ============================================
+   Reset & Base
+   ============================================ */
+* { box-sizing: border-box; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    margin: 0;
+    padding: 20px;
+    background: #f0f2f5;
+    color: #1a1a1a;
+    min-height: 100vh;
+}
+
+h1 { margin: 0 0 20px 0; }
+h2 { margin: 0 0 12px 0; font-size: 16px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+h3 { margin: 0 0 16px 0; }
+
+a { color: #3b82f6; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ============================================
+   Page Header & Navigation
+   ============================================ */
+.page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.main-nav {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.main-nav a {
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 500;
+    background: white;
+    color: #374151;
+    text-decoration: none;
+    transition: background 0.2s;
+}
+
+.main-nav a:hover {
+    background: #e5e7eb;
+    text-decoration: none;
+}
+
+.main-nav a.active {
+    background: #3b82f6;
+    color: white;
+}
+
+/* ============================================
+   Grid & Cards
+   ============================================ */
+.grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 16px;
+}
+
+.card {
+    background: white;
+    border-radius: 8px;
+    padding: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.card h2 {
+    margin: 0 0 12px 0;
+    font-size: 16px;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* ============================================
+   Buttons
+   ============================================ */
+.btn {
+    padding: 6px 12px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+    text-decoration: none;
+    display: inline-block;
+    transition: background 0.2s;
+}
+
+.btn:hover { text-decoration: none; }
+
+.btn-primary { background: #3b82f6; color: white; }
+.btn-primary:hover { background: #2563eb; }
+.btn-primary:disabled { background: #9ca3af; cursor: not-allowed; }
+
+.btn-secondary { background: #e5e7eb; color: #374151; }
+.btn-secondary:hover { background: #d1d5db; }
+
+.btn-danger { background: #ef4444; color: white; }
+.btn-danger:hover { background: #dc2626; }
+
+.btn-success { background: #10b981; color: white; }
+.btn-success:hover { background: #059669; }
+
+.btn-distribute { background: #8b5cf6; color: white; }
+.btn-distribute:hover { background: #7c3aed; }
+.btn-distribute:disabled { background: #9ca3af; cursor: not-allowed; }
+
+.btn-archive { background: #e0e7ff; color: #4338ca; }
+.btn-archive:hover { background: #c7d2fe; }
+
+.btn-delete { background: #fee2e2; color: #dc2626; }
+.btn-delete:hover { background: #fecaca; }
+.btn-delete:disabled { background: #f3f4f6; color: #9ca3af; cursor: not-allowed; }
+
+.btn-sm { padding: 4px 8px; font-size: 11px; margin: 0 2px; }
+
+.btn-cancel { background: #ef4444; color: white; font-weight: bold; min-width: 24px; }
+.btn-cancel:hover { background: #dc2626; }
+
+/* ============================================
+   Tables
+   ============================================ */
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th { text-align: left; padding: 8px; border-bottom: 2px solid #eee; color: #666; font-weight: 600; }
+td { padding: 8px; border-bottom: 1px solid #eee; }
+
+th, td { padding: 12px; }
+
+/* ============================================
+   Status Badges
+   ============================================ */
+.badge, .status-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+/* Pipeline state badges */
+.state-iso-creating { background: #fed7aa; color: #9a3412; }
+.state-iso-ready { background: #fef3c7; color: #92400e; }
+.state-distributing { background: #fce7f3; color: #9d174d; }
+.state-encoding { background: #dbeafe; color: #1e40af; }
+.state-encoded-ready { background: #d1fae5; color: #065f46; }
+.state-transferring { background: #ede9fe; color: #5b21b6; }
+
+/* Archive page badges */
+.badge-state { background: #dbeafe; color: #1e40af; }
+.badge-deletable { background: #fef3c7; color: #92400e; }
+.badge-none { background: #f3f4f6; color: #6b7280; }
+.badge-transferring { background: #d1fae5; color: #065f46; }
+.badge-archiving { background: #e0e7ff; color: #4338ca; }
+.badge-archived { background: #d1fae5; color: #047857; }
+
+/* ============================================
+   Progress Bars
+   ============================================ */
+.progress-section { margin-top: 16px; }
+.progress-item { margin-bottom: 12px; }
+.progress-header { display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 13px; }
+.progress-label { font-weight: 500; }
+.progress-stats { color: #666; }
+.progress-bar { background: #e5e7eb; height: 8px; border-radius: 4px; overflow: hidden; }
+.progress-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+
+.progress-iso { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+.progress-encoder { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
+.progress-distributing { background: linear-gradient(90deg, #ec4899, #f472b6); }
+.progress-transfer { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
+.progress-archive { background: linear-gradient(90deg, #10b981, #059669); }
+.progress-receiving { background: linear-gradient(90deg, #10b981, #34d399); animation: pulse-receiving 2s ease-in-out infinite; }
+
+.progress-bar-mini { background: #e5e7eb; height: 4px; border-radius: 2px; overflow: hidden; margin-top: 4px; }
+.progress-bar-mini .progress-bar-fill { height: 100%; background: #10b981; transition: width 0.3s ease; }
+.progress-bar-mini.pulsing .progress-bar-fill { animation: pulse-receiving 1.5s ease-in-out infinite; }
+
+@keyframes pulse-receiving {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+/* ============================================
+   Disk Usage Bars
+   ============================================ */
+.disk-bar { background: #e5e7eb; height: 24px; border-radius: 12px; overflow: hidden; }
+.disk-fill {
+    height: 100%;
+    transition: width 0.3s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 12px;
+    font-weight: 600;
+    min-width: 40px;
+}
+.disk-ok { background: #10b981; }
+.disk-warn { background: #f59e0b; }
+.disk-danger { background: #ef4444; }
+
+/* ============================================
+   Lock Status Indicators
+   ============================================ */
+.lock-status { display: flex; gap: 20px; flex-wrap: wrap; }
+.lock-item { display: flex; align-items: center; gap: 8px; }
+.lock-dot { width: 12px; height: 12px; border-radius: 50%; }
+.lock-active { background: #10b981; animation: pulse 2s infinite; }
+.lock-idle { background: #d1d5db; }
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* ============================================
+   Modals
+   ============================================ */
+.modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.5);
+    z-index: 1000;
+    justify-content: center;
+    align-items: center;
+}
+.modal-overlay.active { display: flex; }
+.modal { background: white; padding: 24px; border-radius: 8px; max-width: 400px; width: 90%; }
+.modal h3 { margin: 0 0 16px 0; }
+.modal-buttons { display: flex; gap: 12px; margin-top: 20px; justify-content: flex-end; }
+.btn-modal-cancel { background: #e5e7eb; color: #374151; }
+.btn-modal-cancel:hover { background: #d1d5db; }
+.btn-modal-confirm { background: #ef4444; color: white; }
+.btn-modal-confirm:hover { background: #dc2626; }
+
+/* ============================================
+   Code & Pre
+   ============================================ */
+pre, code {
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+}
+
+pre {
+    background: #1e1e1e;
+    color: #d4d4d4;
+    padding: 12px;
+    overflow-x: auto;
+    border-radius: 4px;
+    font-size: 11px;
+    line-height: 1.4;
+    max-height: 300px;
+    overflow-y: auto;
+    margin: 0;
+}
+
+/* ============================================
+   Flash Messages
+   ============================================ */
+.flash { padding: 12px 16px; border-radius: 4px; margin-bottom: 16px; }
+.flash-success { background: #d1fae5; color: #065f46; border: 1px solid #a7f3d0; }
+.flash-error { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+.flash-warning { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+.flash-info { background: #dbeafe; color: #1e40af; border: 1px solid #bfdbfe; }
+
+/* ============================================
+   Notifications (Toast)
+   ============================================ */
+.notification {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    padding: 12px 20px;
+    border-radius: 8px;
+    color: white;
+    font-weight: 500;
+    z-index: 2000;
+    animation: slideIn 0.3s ease;
+}
+.notification.success { background: #10b981; }
+.notification.error { background: #ef4444; }
+.notification.info { background: #3b82f6; }
+
+@keyframes slideIn {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+
+/* ============================================
+   Pagination
+   ============================================ */
+.pagination { display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+.pagination a, .pagination span { padding: 6px 12px; border-radius: 4px; text-decoration: none; font-size: 14px; }
+.pagination a { background: #374151; color: #e5e7eb; }
+.pagination a:hover { background: #4b5563; text-decoration: none; }
+.pagination span.current { background: #3b82f6; color: white; }
+.pagination span.disabled { background: #1f2937; color: #6b7280; cursor: not-allowed; }
+.pagination span.ellipsis { background: none; color: #6b7280; }
+
+/* ============================================
+   Footer
+   ============================================ */
+.footer {
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid #e5e7eb;
+    font-size: 12px;
+    color: #666;
+    text-align: center;
+}
+
+.footer a { color: #3b82f6; }
+
+/* ============================================
+   Empty States
+   ============================================ */
+.queue-empty { color: #666; font-style: italic; padding: 20px 0; }
+.empty-state { text-align: center; padding: 40px 20px; color: #6b7280; }
+.empty-state h3 { color: #374151; margin-bottom: 8px; }
+
+/* ============================================
+   Forms
+   ============================================ */
+.form-group { margin-bottom: 16px; }
+.form-group label { display: block; margin-bottom: 4px; font-weight: 500; color: #374151; }
+.form-group input[type="text"],
+.form-group input[type="number"],
+.form-group select,
+.form-group textarea {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    font-size: 14px;
+}
+.form-group input:focus,
+.form-group select:focus,
+.form-group textarea:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+/* ============================================
+   Archives Page Specific
+   ============================================ */
+.archive-row { transition: background 0.2s; }
+.archive-row:hover { background: #f9fafb; }
+.archive-row.dragging { opacity: 0.5; background: #dbeafe; }
+.archive-row[draggable="true"] { cursor: grab; }
+.archive-row[draggable="true"]:active { cursor: grabbing; }
+
+.archived-row { background: #f0fdf4; }
+.archived-row:hover { background: #dcfce7; }
+.archived-row .size-cell { color: #059669; }
+
+.title-cell { font-weight: 500; }
+.title-cell small { display: block; font-weight: 400; color: #6b7280; font-size: 11px; }
+
+.size-cell { font-family: 'SF Mono', Monaco, monospace; font-size: 13px; }
+
+.archive-cell { white-space: nowrap; }
+.archive-info { display: flex; flex-direction: column; gap: 2px; }
+.compression-ratio { font-size: 10px; color: #059669; }
+
+.files-cell { white-space: nowrap; }
+.file-present { color: #059669; font-weight: 500; margin-right: 8px; }
+.file-missing { color: #d1d5db; margin-right: 8px; }
+
+/* Drop zones for drag and drop */
+.drop-zone {
+    padding: 16px;
+    border: 2px dashed #d1d5db;
+    border-radius: 8px;
+    text-align: center;
+    margin-bottom: 12px;
+    transition: all 0.2s;
+}
+.drop-zone.online { border-color: #10b981; background: #f0fdf4; }
+.drop-zone.offline { border-color: #ef4444; background: #fef2f2; opacity: 0.6; }
+.drop-zone.drag-over { border-color: #3b82f6; background: #dbeafe; transform: scale(1.02); }
+
+/* ============================================
+   Cluster Page Specific
+   ============================================ */
+.peer-card { border-left: 4px solid #d1d5db; }
+.peer-card.online { border-left-color: #10b981; }
+.peer-card.offline { border-left-color: #ef4444; }
+
+/* ============================================
+   Health Page Specific
+   ============================================ */
+.health-check { display: flex; align-items: center; gap: 8px; padding: 8px 0; }
+.health-icon { font-size: 18px; }
+.health-pass { color: #10b981; }
+.health-fail { color: #ef4444; }
+.health-warn { color: #f59e0b; }
+
+/* ============================================
+   Log Viewer
+   ============================================ */
+.log-content {
+    background: #1e1e1e;
+    color: #d4d4d4;
+    font-family: 'SF Mono', Monaco, monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    padding: 16px;
+    border-radius: 4px;
+    overflow-x: auto;
+    max-height: 600px;
+    overflow-y: auto;
+}
+
+.log-line { white-space: pre-wrap; word-break: break-all; }
+.log-line-number { color: #6b7280; user-select: none; margin-right: 16px; }
+
+/* ============================================
+   Queue Actions
+   ============================================ */
+.queue-actions { white-space: nowrap; }
+
+/* ============================================
+   Receiving Transfers Section
+   ============================================ */
+.receiving-section { margin-bottom: 20px; }
+.receiving-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.receiving-item { background: #f0fdf4; border-radius: 8px; padding: 12px; }
+.receiving-title { font-weight: 500; margin-bottom: 4px; }
+.receiving-info { display: flex; justify-content: space-between; font-size: 12px; color: #6b7280; margin-bottom: 8px; }
+.receiving-status { color: #059669; }
+
+/* ============================================
+   Utilities
+   ============================================ */
+.text-center { text-align: center; }
+.text-right { text-align: right; }
+.text-muted { color: #6b7280; }
+.text-small { font-size: 12px; }
+.mt-1 { margin-top: 8px; }
+.mt-2 { margin-top: 16px; }
+.mb-1 { margin-bottom: 8px; }
+.mb-2 { margin-bottom: 16px; }
+.hidden { display: none; }

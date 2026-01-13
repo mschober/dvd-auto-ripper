@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}Logs{% endblock %}
+
+{% block header %}<a href="/">Dashboard</a> / Logs{% endblock %}
+
+{% block extra_css %}
+<style>
+    .logs-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+        gap: 20px;
+    }
+    .card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+    }
+    .stage-iso { border-left: 4px solid #ef4444; }
+    .stage-encoder { border-left: 4px solid #f59e0b; }
+    .stage-transfer { border-left: 4px solid #10b981; }
+    .stage-distribute { border-left: 4px solid #8b5cf6; }
+    .stage-archive { border-left: 4px solid #06b6d4; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="logs-grid">
+    {% for stage, log_content in logs.items() %}
+    <div class="card stage-{{ stage }}">
+        <div class="card-header">
+            <h2>{{ stage|title }}</h2>
+            <a href="/log/{{ stage }}" class="btn btn-sm">Full Log</a>
+        </div>
+        <pre>{{ log_content }}</pre>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

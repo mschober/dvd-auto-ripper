@@ -13,14 +13,16 @@ import glob
 import socket
 import subprocess
 from datetime import datetime
-from flask import Flask, jsonify, render_template_string, request, redirect, url_for, send_file
+from flask import Flask, jsonify, render_template, render_template_string, request, redirect, url_for, send_file
 from helpers.pipeline import (
     get_queue_items, count_by_state,
     STAGING_DIR, STATE_ORDER, QUEUE_ITEMS_PER_PAGE
 )
 from pages.archives import archives_bp
 
-app = Flask(__name__)
+app = Flask(__name__,
+            template_folder='templates',
+            static_folder='static')
 app.register_blueprint(archives_bp)
 
 # Configuration - can be overridden via environment variables
@@ -5027,8 +5029,10 @@ def logs_page():
     """Per-stage logs overview page."""
     lines = request.args.get("lines", 50, type=int)
     logs = {stage: get_stage_logs(stage, lines) for stage in LOG_FILES.keys()}
-    return render_template_string(
-        LOGS_HTML,
+    return render_template(
+        "logs.html",
+        active_page="logs",
+        version=DASHBOARD_VERSION,
         logs=logs,
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
@@ -5073,8 +5077,10 @@ def config_page():
 @app.route("/architecture")
 def architecture_page():
     """Architecture documentation page."""
-    return render_template_string(
-        ARCHITECTURE_HTML,
+    return render_template(
+        "architecture.html",
+        active_page="architecture",
+        version=DASHBOARD_VERSION,
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
         github_url=GITHUB_URL,

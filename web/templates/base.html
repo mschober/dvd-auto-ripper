@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{% block title %}Dashboard{% endblock %} | {{ hostname }}</title>
+    {% block meta %}
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    {% endblock %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <div class="page-header">
+        <h1>{% block header %}DVD Ripper Dashboard{% endblock %}</h1>
+        <nav class="main-nav">
+            <a href="/" class="{% if active_page == 'dashboard' %}active{% endif %}">Dashboard</a>
+            <a href="/archives" class="{% if active_page == 'archives' %}active{% endif %}">Archives</a>
+            <a href="/cluster" class="{% if active_page == 'cluster' %}active{% endif %}">Cluster</a>
+            <a href="/logs" class="{% if active_page == 'logs' %}active{% endif %}">Logs</a>
+            <a href="/config" class="{% if active_page == 'config' %}active{% endif %}">Config</a>
+            <a href="/status" class="{% if active_page == 'status' %}active{% endif %}">Status</a>
+            <a href="/health" class="{% if active_page == 'health' %}active{% endif %}">Health</a>
+            <a href="/issues" class="{% if active_page == 'issues' %}active{% endif %}">Issues</a>
+            <a href="/architecture" class="{% if active_page == 'architecture' %}active{% endif %}">Arch</a>
+        </nav>
+    </div>
+
+    {% if message %}
+    <div class="flash flash-{{ message_type }}">{{ message }}</div>
+    {% endif %}
+
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+        <a href="{{ github_url }}" target="_blank">dvd-auto-ripper</a> v{{ version }}
+    </footer>
+
+    <script src="{{ url_for('static', filename='js/common.js') }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>
