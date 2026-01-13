@@ -1,0 +1,261 @@
+{% extends "base.html" %}
+
+{% block title %}Issues{% endblock %}
+
+{% block header %}<a href="/">Dashboard</a> / Issues{% endblock %}
+
+{% block extra_css %}
+<style>
+    .subtitle { color: #666; margin-bottom: 20px; }
+    .identify-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+        gap: 20px;
+    }
+    .identify-card {
+        background: white;
+        border-radius: 8px;
+        padding: 16px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .preview-container {
+        position: relative;
+        background: #000;
+        border-radius: 4px;
+        overflow: hidden;
+        margin-bottom: 12px;
+    }
+    .preview-video {
+        width: 100%;
+        max-height: 240px;
+        display: block;
+    }
+    .no-preview {
+        padding: 60px 20px;
+        text-align: center;
+        color: #666;
+        background: #f8fafc;
+        border-radius: 4px;
+    }
+    .current-name {
+        font-family: monospace;
+        background: #fef3c7;
+        padding: 8px 12px;
+        border-radius: 4px;
+        margin-bottom: 12px;
+        font-size: 13px;
+        border-left: 3px solid #f59e0b;
+    }
+    .form-group { margin-bottom: 12px; }
+    .form-group label {
+        display: block;
+        font-weight: 600;
+        margin-bottom: 4px;
+        color: #374151;
+        font-size: 14px;
+    }
+    .form-group input {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        font-size: 14px;
+    }
+    .form-group input:focus {
+        outline: none;
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    }
+    .form-row {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 12px;
+    }
+    .state-info {
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px solid #e5e7eb;
+        font-size: 12px;
+        color: #6b7280;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .empty-state {
+        background: white;
+        border-radius: 8px;
+        padding: 40px;
+        text-align: center;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .empty-state h2 { color: #059669; margin-bottom: 8px; }
+    .empty-state p { color: #6b7280; }
+    .audit-section {
+        margin-top: 30px;
+        padding-top: 20px;
+        border-top: 2px solid #e5e7eb;
+    }
+    .audit-section h2 {
+        margin: 0 0 16px 0;
+        color: #dc2626;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .audit-card {
+        background: #fef2f2;
+        border: 1px solid #fecaca;
+        border-radius: 8px;
+        padding: 16px;
+        margin-bottom: 12px;
+    }
+    .audit-title {
+        font-weight: 600;
+        font-size: 16px;
+        margin-bottom: 8px;
+    }
+    .audit-issues {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 12px;
+    }
+    .audit-issue {
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: 500;
+    }
+    .issue-gibberish { background: #fef3c7; color: #92400e; }
+    .issue-small { background: #fee2e2; color: #991b1b; }
+    .issue-missing { background: #ddd6fe; color: #5b21b6; }
+    .audit-meta {
+        font-size: 12px;
+        color: #6b7280;
+    }
+    .btn-dismiss {
+        background: #e5e7eb;
+        color: #374151;
+        padding: 6px 12px;
+        margin-top: 8px;
+    }
+    .btn-dismiss:hover { background: #d1d5db; }
+    .success-msg {
+        background: #d1fae5;
+        color: #065f46;
+        padding: 8px 12px;
+        border-radius: 4px;
+        margin-bottom: 12px;
+        display: none;
+    }
+    .error-msg {
+        background: #fee2e2;
+        color: #991b1b;
+        padding: 8px 12px;
+        border-radius: 4px;
+        margin-bottom: 12px;
+        display: none;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<p class="subtitle">Items needing attention: generic names to identify, audit flags to review.</p>
+
+{% if pending %}
+<h2 style="margin: 0 0 16px 0; color: #f59e0b;">Needs Identification</h2>
+<p style="color: #666; margin-bottom: 16px;">These items have generic names. Watch the preview to identify each movie.</p>
+<div class="identify-grid">
+    {% for item in pending %}
+    <div class="identify-card" data-state-file="{{ item.state_file }}">
+        <div class="success-msg"></div>
+        <div class="error-msg"></div>
+
+        <div class="preview-container">
+            {% if item.metadata.preview_path %}
+            <video class="preview-video" controls preload="metadata">
+                <source src="/api/preview/{{ item.metadata.preview_path.split('/')[-1] }}" type="video/mp4">
+                Your browser does not support video playback.
+            </video>
+            {% else %}
+            <div class="no-preview">
+                No preview available<br>
+                <small>Preview will be generated during encoding</small>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="current-name">
+            Current: {{ item.metadata.title | replace('_', ' ') }}
+            {% if item.metadata.year %} ({{ item.metadata.year }}){% endif %}
+        </div>
+
+        <form class="rename-form" onsubmit="return handleRename(this, event)">
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="title-{{ loop.index }}">Movie Title</label>
+                    <input type="text" id="title-{{ loop.index }}" name="title"
+                           placeholder="The Matrix" required>
+                </div>
+                <div class="form-group">
+                    <label for="year-{{ loop.index }}">Year</label>
+                    <input type="text" id="year-{{ loop.index }}" name="year"
+                           placeholder="1999" pattern="[0-9]{4}" maxlength="4">
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary" style="width: 100%;">Rename &amp; Identify</button>
+        </form>
+
+        <div class="state-info">
+            <span class="status-badge state-{{ item.state }}">{{ item.state }}</span>
+            {% if item.metadata.nas_path %}
+            <span title="{{ item.metadata.nas_path }}">On NAS</span>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+{% if not audit_flags %}
+<div class="empty-state">
+    <h2>All Clear!</h2>
+    <p>No issues found. All your DVDs have proper names and passed audit.</p>
+    <p><a href="/">Return to Dashboard</a></p>
+</div>
+{% endif %}
+{% endif %}
+
+{% if audit_flags %}
+<div class="audit-section">
+    <h2>Audit Flags</h2>
+    <p class="subtitle">These videos were flagged by the hourly audit for potential issues.</p>
+    {% for flag in audit_flags %}
+    <div class="audit-card" data-title="{{ flag.title }}">
+        <div class="audit-title">{{ flag.title }}</div>
+        <div class="audit-issues">
+            {% if 'gibberish' in flag.issues %}
+            <span class="audit-issue issue-gibberish">Suspicious Title</span>
+            {% endif %}
+            {% if 'small' in flag.issues %}
+            <span class="audit-issue issue-small">Small File ({{ flag.size_mb }}MB)</span>
+            {% endif %}
+            {% if 'missing' in flag.issues %}
+            <span class="audit-issue issue-missing">Missing Archive</span>
+            {% endif %}
+        </div>
+        <div class="audit-meta">
+            Flagged: {{ flag.flagged_at[:19] if flag.flagged_at else 'Unknown' }}
+            {% if flag.hostname %} | Host: {{ flag.hostname }}{% endif %}
+        </div>
+        <button class="btn btn-dismiss" onclick="dismissAuditFlag('{{ flag.title }}', this)">
+            Dismiss Flag
+        </button>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/identify.js') }}"></script>
+{% endblock %}

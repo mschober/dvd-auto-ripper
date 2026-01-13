@@ -5001,8 +5001,9 @@ def dashboard():
 
     cluster_config = get_cluster_config()
     queue_data = get_queue_items(page=page)
-    return render_template_string(
-        DASHBOARD_HTML,
+    return render_template(
+        "dashboard.html",
+        active_page="dashboard",
         counts=count_by_state(),
         queue=queue_data["items"],
         queue_total=queue_data["total"],
@@ -5016,7 +5017,7 @@ def dashboard():
         message_type=message_type,
         pending_identification=len(get_pending_identification()),
         audit_flag_count=len(get_audit_flags()),
-        pipeline_version=get_pipeline_version(),
+        version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
         github_url=GITHUB_URL,
         cluster_enabled=cluster_config.get("cluster_enabled", False),
@@ -5047,10 +5048,11 @@ def stage_log_page(stage):
     if stage not in LOG_FILES:
         return f"Unknown stage: {stage}", 404
     lines = request.args.get("lines", 200, type=int)
-    return render_template_string(
-        STAGE_LOG_HTML,
+    return render_template(
+        "stage_log.html",
         stage=stage,
         logs=get_stage_logs(stage, lines),
+        version=DASHBOARD_VERSION,
         pipeline_version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
         github_url=GITHUB_URL,
@@ -5061,13 +5063,14 @@ def stage_log_page(stage):
 @app.route("/config")
 def config_page():
     """Configuration edit page with collapsible sections."""
-    return render_template_string(
-        CONFIG_HTML,
+    return render_template(
+        "config.html",
+        active_page="config",
         config=read_config_full(),
         sections=CONFIG_SECTIONS,
         boolean_settings=BOOLEAN_SETTINGS,
         dropdown_settings=DROPDOWN_SETTINGS,
-        pipeline_version=get_pipeline_version(),
+        version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
         github_url=GITHUB_URL,
         hostname=HOSTNAME
@@ -5092,11 +5095,12 @@ def architecture_page():
 @app.route("/identify")  # Keep old route for backwards compatibility
 def issues_page():
     """Issues page for items needing attention (identification, audit flags)."""
-    return render_template_string(
-        IDENTIFY_HTML,
+    return render_template(
+        "identify.html",
+        active_page="issues",
         pending=get_pending_identification(),
         audit_flags=get_audit_flags(),
-        pipeline_version=get_pipeline_version(),
+        version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
         github_url=GITHUB_URL,
         hostname=HOSTNAME
@@ -5109,14 +5113,15 @@ def status_page():
     message = request.args.get("message")
     message_type = request.args.get("type", "success")
 
-    return render_template_string(
-        STATUS_HTML,
+    return render_template(
+        "status.html",
+        active_page="status",
         services=get_all_service_status(),
         timers=get_all_timer_status(),
         udev_trigger=get_udev_trigger_status(),
         message=message,
         message_type=message_type,
-        pipeline_version=get_pipeline_version(),
+        version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
         github_url=GITHUB_URL,
         hostname=HOSTNAME
@@ -5129,8 +5134,8 @@ def health_page():
     message = request.args.get("message")
     message_type = request.args.get("type", "success")
 
-    return render_template_string(
-        HEALTH_HTML,
+    return render_template(
+        "health.html",
         cpu=get_cpu_usage(),
         memory=get_memory_usage(),
         load=get_load_average(),
@@ -5216,8 +5221,9 @@ def cluster_page():
     except Exception:
         hostname = "node1"
 
-    return render_template_string(
-        CLUSTER_HTML,
+    return render_template(
+        "cluster.html",
+        active_page="cluster",
         cluster_enabled=config["cluster_enabled"],
         this_node=this_node,
         peers=peers,
@@ -5226,7 +5232,7 @@ def cluster_page():
         received_jobs=get_received_jobs(),
         io=get_io_stats(),
         hostname=hostname,
-        pipeline_version=get_pipeline_version(),
+        version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
         github_url=GITHUB_URL
     )

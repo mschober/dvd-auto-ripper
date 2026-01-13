@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Health | {{ hostname }}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0; padding: 20px; background: #0f172a; color: #e2e8f0;
+            min-height: 100vh;
+        }
+        h1 { margin: 0 0 8px 0; color: #f1f5f9; }
+        h1 a { color: #60a5fa; text-decoration: none; }
+        h1 a:hover { text-decoration: underline; }
+        h2 { margin: 0 0 16px 0; font-size: 14px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; }
+        .subtitle { color: #94a3b8; margin-bottom: 20px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 20px; }
+        .card {
+            background: #1e293b;
+            border-radius: 8px;
+            padding: 16px;
+            border: 1px solid #334155;
+        }
+        .metric-value { font-size: 32px; font-weight: 700; color: #f1f5f9; }
+        .metric-label { font-size: 12px; color: #94a3b8; text-transform: uppercase; margin-top: 4px; }
+        .metric-bar { background: #334155; height: 8px; border-radius: 4px; margin-top: 12px; overflow: hidden; }
+        .metric-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+        .fill-ok { background: linear-gradient(90deg, #10b981, #34d399); }
+        .fill-warn { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+        .fill-danger { background: linear-gradient(90deg, #ef4444, #f87171); }
+        .load-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; text-align: center; }
+        .load-value { font-size: 24px; font-weight: 600; color: #f1f5f9; }
+        .load-label { font-size: 11px; color: #64748b; }
+        .temp-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #334155; }
+        .temp-item:last-child { border-bottom: none; }
+        .temp-label { color: #94a3b8; font-size: 13px; }
+        .temp-value { font-weight: 600; }
+        .temp-ok { color: #10b981; }
+        .temp-warn { color: #f59e0b; }
+        .temp-critical { color: #ef4444; }
+        .fan-rpm { color: #60a5fa; font-size: 13px; }
+
+        /* Process table styles */
+        .process-card { grid-column: 1 / -1; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th { text-align: left; padding: 10px 8px; color: #64748b; font-weight: 600; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #334155; }
+        td { padding: 10px 8px; border-bottom: 1px solid #1e293b; }
+        tr:hover { background: #334155; }
+        .pid { font-family: monospace; color: #94a3b8; }
+        .cpu-high { color: #ef4444; font-weight: 600; }
+        .cpu-med { color: #f59e0b; }
+        .cpu-low { color: #10b981; }
+        .command { font-family: monospace; font-size: 11px; color: #94a3b8; max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .type-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .type-encoder { background: #3b82f6; color: white; }
+        .type-iso { background: #f59e0b; color: white; }
+        .type-transfer { background: #8b5cf6; color: white; }
+        .type-preview { background: #10b981; color: white; }
+        .type-unknown { background: #6b7280; color: white; }
+
+        .btn {
+            padding: 4px 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        .btn-kill { background: #dc2626; color: white; }
+        .btn-kill:hover { background: #b91c1c; }
+        .btn-kill:disabled { background: #6b7280; cursor: not-allowed; }
+
+        .no-processes { color: #64748b; text-align: center; padding: 40px; }
+        .flash { padding: 12px 16px; border-radius: 4px; margin-bottom: 16px; }
+        .flash-success { background: #065f46; color: #d1fae5; border: 1px solid #10b981; }
+        .flash-error { background: #991b1b; color: #fee2e2; border: 1px solid #ef4444; }
+        .footer {
+            margin-top: 20px;
+            font-size: 12px;
+            color: #64748b;
+            text-align: center;
+        }
+        .footer a { color: #60a5fa; text-decoration: none; }
+        .auto-refresh { font-size: 11px; color: #64748b; margin-top: 8px; }
+        .sensors-unavailable { color: #64748b; font-style: italic; font-size: 13px; }
+
+        /* Kill confirmation modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 100;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal {
+            background: #1e293b;
+            border-radius: 8px;
+            padding: 24px;
+            max-width: 400px;
+            border: 1px solid #334155;
+        }
+        .modal h3 { margin: 0 0 12px 0; color: #f1f5f9; }
+        .modal p { color: #94a3b8; margin: 0 0 20px 0; font-size: 14px; }
+        .modal-buttons { display: flex; gap: 12px; justify-content: flex-end; }
+        .btn-cancel { background: #475569; color: white; padding: 8px 16px; }
+        .btn-cancel:hover { background: #64748b; }
+        .btn-confirm-kill { background: #dc2626; color: white; padding: 8px 16px; }
+        .btn-confirm-kill:hover { background: #b91c1c; }
+
+        /* I/O Panel styles */
+        .io-card { grid-column: 1 / -1; }
+        .io-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 16px;
+            margin-bottom: 16px;
+            text-align: center;
+        }
+        .io-stat {
+            padding: 12px;
+            background: #334155;
+            border-radius: 6px;
+        }
+        .io-value {
+            font-size: 24px;
+            font-weight: 600;
+            color: #f1f5f9;
+            display: block;
+        }
+        .io-label {
+            font-size: 11px;
+            color: #94a3b8;
+            text-transform: uppercase;
+            margin-top: 4px;
+        }
+        .io-warn { color: #f59e0b; }
+        .device-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .device-hdd { background: #6b7280; color: white; }
+        .device-ssd { background: #3b82f6; color: white; }
+        .device-nvme { background: #10b981; color: white; }
+        .device-usb { background: #f59e0b; color: white; }
+        .device-unknown { background: #475569; color: white; }
+        .device-model { color: #64748b; font-size: 11px; display: block; }
+        .io-unavailable { color: #64748b; font-style: italic; font-size: 13px; text-align: center; padding: 20px; }
+    </style>
+</head>
+<body>
+    <h1><a href="/">Dashboard</a> / System Health</h1>
+    <p class="subtitle">Real-time system metrics and process monitoring</p>
+
+    {% if message %}
+    <div class="flash flash-{{ message_type }}">{{ message }}</div>
+    {% endif %}
+
+    <div class="grid">
+        <div class="card">
+            <h2>CPU Usage</h2>
+            <div class="metric-value" id="cpu-value">{{ cpu.cpu.usage if cpu.cpu else 0 }}%</div>
+            <div class="metric-label">Total CPU</div>
+            <div class="metric-bar">
+                <div class="metric-fill {% if cpu.cpu.usage > 80 %}fill-danger{% elif cpu.cpu.usage > 50 %}fill-warn{% else %}fill-ok{% endif %}"
+                     id="cpu-bar" style="width: {{ cpu.cpu.usage if cpu.cpu else 0 }}%"></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Memory</h2>
+            <div class="metric-value" id="mem-value">{{ memory.percent }}%</div>
+            <div class="metric-label">{{ memory.used_human }} / {{ memory.total_human }}</div>
+            <div class="metric-bar">
+                <div class="metric-fill {% if memory.percent > 80 %}fill-danger{% elif memory.percent > 60 %}fill-warn{% else %}fill-ok{% endif %}"
+                     id="mem-bar" style="width: {{ memory.percent }}%"></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Load Average</h2>
+            <div class="load-grid">
+                <div>
+                    <div class="load-value {% if load.load_1m > load.cpu_count %}temp-critical{% elif load.load_1m > load.cpu_count * 0.8 %}temp-warn{% else %}temp-ok{% endif %}" id="load-1m">{{ "%.2f"|format(load.load_1m) }}</div>
+                    <div class="load-label">1 min</div>
+                </div>
+                <div>
+                    <div class="load-value" id="load-5m">{{ "%.2f"|format(load.load_5m) }}</div>
+                    <div class="load-label">5 min</div>
+                </div>
+                <div>
+                    <div class="load-value" id="load-15m">{{ "%.2f"|format(load.load_15m) }}</div>
+                    <div class="load-label">15 min</div>
+                </div>
+            </div>
+            <div class="metric-label" style="margin-top: 12px; text-align: center;">
+                {{ load.cpu_count }} cores | {{ "%.2f"|format(load.load_per_core) }} per core
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Temperature & Fans</h2>
+            {% if temps.available %}
+                {% for temp in temps.temperatures %}
+                <div class="temp-item">
+                    <span class="temp-label">{{ temp.sensor }}</span>
+                    <span class="temp-value temp-{{ temp.status }}">{{ temp.temp_c }}C</span>
+                </div>
+                {% endfor %}
+                {% for fan in temps.fans %}
+                <div class="temp-item">
+                    <span class="temp-label">{{ fan.sensor }}</span>
+                    <span class="fan-rpm">{{ fan.rpm }} RPM</span>
+                </div>
+                {% endfor %}
+                {% if not temps.temperatures and not temps.fans %}
+                <p class="sensors-unavailable">No temperature/fan sensors detected</p>
+                {% endif %}
+            {% else %}
+                <p class="sensors-unavailable">
+                    {% if temps.error %}
+                    {{ temps.error }}
+                    {% else %}
+                    Sensors not available
+                    {% endif %}
+                </p>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="grid">
+        <div class="card io-card">
+            <h2>Storage & I/O</h2>
+            {% if io.available %}
+            <div class="io-summary">
+                <div class="io-stat">
+                    <span class="io-value">{{ "%.1f"|format(io.total_read_mb_s) }}</span>
+                    <span class="io-label">MB/s Read</span>
+                </div>
+                <div class="io-stat">
+                    <span class="io-value">{{ "%.1f"|format(io.total_write_mb_s) }}</span>
+                    <span class="io-label">MB/s Write</span>
+                </div>
+                <div class="io-stat">
+                    <span class="io-value {% if io.iowait_percent > 20 %}io-warn{% endif %}">{{ "%.1f"|format(io.iowait_percent) }}%</span>
+                    <span class="io-label">I/O Wait</span>
+                </div>
+            </div>
+            {% if io.devices %}
+            <table>
+                <tr>
+                    <th>Device</th>
+                    <th>Type</th>
+                    <th>Size</th>
+                    <th>Mount</th>
+                    <th>Read</th>
+                    <th>Write</th>
+                </tr>
+                {% for dev in io.devices %}
+                <tr>
+                    <td>{{ dev.name }}{% if dev.model %}<span class="device-model">{{ dev.model }}</span>{% endif %}</td>
+                    <td><span class="device-badge device-{{ dev.type }}">{{ dev.type }}</span></td>
+                    <td>{{ dev.size }}</td>
+                    <td>{{ dev.mountpoint or '-' }}</td>
+                    <td>{{ "%.1f"|format(dev.read_mb_s) }} MB/s</td>
+                    <td>{{ "%.1f"|format(dev.write_mb_s) }} MB/s</td>
+                </tr>
+                {% endfor %}
+            </table>
+            {% else %}
+            <p class="io-unavailable">No block devices detected</p>
+            {% endif %}
+            {% else %}
+            <p class="io-unavailable">
+                {% if io.error %}
+                {{ io.error }}
+                {% else %}
+                I/O statistics not available
+                {% endif %}
+            </p>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="grid">
+        <div class="card process-card">
+            <h2>DVD Ripper Processes</h2>
+            {% if processes %}
+            <table>
+                <tr>
+                    <th>PID</th>
+                    <th>Type</th>
+                    <th>CPU%</th>
+                    <th>MEM%</th>
+                    <th>Time</th>
+                    <th>Command</th>
+                    <th>Action</th>
+                </tr>
+                {% for proc in processes %}
+                <tr>
+                    <td class="pid">{{ proc.pid }}</td>
+                    <td><span class="type-badge type-{{ proc.type }}">{{ proc.type }}</span></td>
+                    <td class="{% if proc.cpu_percent > 80 %}cpu-high{% elif proc.cpu_percent > 30 %}cpu-med{% else %}cpu-low{% endif %}">
+                        {{ "%.1f"|format(proc.cpu_percent) }}%
+                    </td>
+                    <td>{{ "%.1f"|format(proc.mem_percent) }}%</td>
+                    <td>{{ proc.elapsed }}</td>
+                    <td class="command" title="{{ proc.command_full }}">{{ proc.command }}</td>
+                    <td>
+                        <button class="btn btn-kill" onclick="confirmKill({{ proc.pid }}, '{{ proc.type }}')">Kill</button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </table>
+            {% else %}
+            <p class="no-processes">No DVD ripper processes currently running</p>
+            {% endif %}
+            <p class="auto-refresh">Auto-refreshes every 5 seconds</p>
+        </div>
+    </div>
+
+    <!-- Kill Confirmation Modal -->
+    <div class="modal-overlay" id="kill-modal">
+        <div class="modal">
+            <h3>Confirm Kill Process</h3>
+            <p>Are you sure you want to kill PID <strong id="kill-pid"></strong>?<br><br>
+            This will terminate the <strong id="kill-type"></strong> process and revert any in-progress state files.</p>
+            <div class="modal-buttons">
+                <button class="btn btn-cancel" onclick="closeModal()">Cancel</button>
+                <form method="POST" id="kill-form" style="display:inline">
+                    <button class="btn btn-confirm-kill" type="submit">Kill Process</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">
+        Pipeline v{{ pipeline_version }} | Dashboard v{{ dashboard_version }} |
+        <a href="{{ github_url }}" target="_blank">dvd-auto-ripper</a> |
+        <a href="/">Dashboard</a> |
+        <a href="/status">Services</a>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/health.js') }}"></script>
+</body>
+</html>

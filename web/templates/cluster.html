@@ -1,0 +1,588 @@
+{% extends "base.html" %}
+
+{% block title %}Cluster{% endblock %}
+
+{% block header %}<a href="/">Dashboard</a> / Cluster Status{% endblock %}
+
+{% block extra_css %}
+<style>
+    .subtitle { color: #666; margin-bottom: 20px; }
+    .card-full { grid-column: 1 / -1; }
+    .status-dot {
+        display: inline-block;
+        width: 10px; height: 10px;
+        border-radius: 50%;
+        margin-right: 8px;
+    }
+    .status-online { background: #10b981; }
+    .status-offline { background: #ef4444; }
+    .status-unknown { background: #9ca3af; }
+    .status-busy { background: #f59e0b; }
+    .badge-online { background: #d1fae5; color: #065f46; }
+    .badge-offline { background: #fee2e2; color: #991b1b; }
+    .badge-local { background: #dbeafe; color: #1e40af; }
+    .badge-remote { background: #fef3c7; color: #92400e; }
+    .badge-available { background: #d1fae5; color: #065f46; }
+    .badge-busy { background: #fef3c7; color: #92400e; }
+    .badge-disabled { background: #f3f4f6; color: #6b7280; }
+    .node-card {
+        background: white;
+        border-radius: 8px;
+        padding: 16px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        border-left: 4px solid #3b82f6;
+    }
+    .node-card.this-node { border-left-color: #10b981; }
+    .node-card.offline { border-left-color: #ef4444; opacity: 0.7; }
+    .node-card.add-worker-card { border-left-color: #6366f1; border-style: dashed; }
+    .remove-peer-btn {
+        background: transparent;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        color: #888;
+        cursor: pointer;
+        font-size: 14px;
+        padding: 2px 6px;
+        transition: all 0.2s;
+    }
+    .remove-peer-btn:hover { background: #fee2e2; border-color: #ef4444; color: #ef4444; }
+    .node-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+    }
+    .node-name {
+        font-size: 18px;
+        font-weight: 600;
+    }
+    .node-stats {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+        margin-top: 12px;
+    }
+    .stat-box {
+        text-align: center;
+        padding: 8px;
+        background: #f9fafb;
+        border-radius: 6px;
+    }
+    .stat-value {
+        font-size: 20px;
+        font-weight: 700;
+        color: #1a1a1a;
+    }
+    .stat-label {
+        font-size: 11px;
+        color: #6b7280;
+        text-transform: uppercase;
+    }
+    .progress-bar {
+        height: 8px;
+        background: #e5e7eb;
+        border-radius: 4px;
+        overflow: hidden;
+        margin-top: 4px;
+    }
+    .progress-fill {
+        height: 100%;
+        background: #3b82f6;
+        transition: width 0.3s;
+    }
+    .progress-fill.high { background: #ef4444; }
+    .progress-fill.medium { background: #f59e0b; }
+    .meta { font-size: 12px; color: #6b7280; margin-top: 4px; }
+    .cluster-disabled {
+        text-align: center;
+        padding: 40px;
+        color: #6b7280;
+    }
+    .cluster-disabled h3 { color: #1a1a1a; margin-bottom: 12px; }
+    .cluster-disabled code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+    .empty-state { text-align: center; padding: 20px; color: #6b7280; }
+    .refresh-btn {
+        padding: 8px 16px;
+        background: #3b82f6;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 13px;
+    }
+    .refresh-btn:hover { background: #2563eb; }
+    .action-btn {
+        padding: 8px 16px;
+        background: #3b82f6;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 13px;
+    }
+    .action-btn:hover { background: #2563eb; }
+
+    /* I/O Panel styles */
+    .io-summary {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+        gap: 16px;
+        margin-bottom: 16px;
+        text-align: center;
+    }
+    .io-stat {
+        padding: 12px;
+        background: #f9fafb;
+        border-radius: 6px;
+    }
+    .io-value {
+        font-size: 24px;
+        font-weight: 600;
+        color: #1a1a1a;
+        display: block;
+    }
+    .io-label {
+        font-size: 11px;
+        color: #6b7280;
+        text-transform: uppercase;
+        margin-top: 4px;
+    }
+    .io-warn { color: #f59e0b; }
+    .device-badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+    .device-hdd { background: #9ca3af; color: white; }
+    .device-ssd { background: #3b82f6; color: white; }
+    .device-nvme { background: #10b981; color: white; }
+    .device-usb { background: #f59e0b; color: white; }
+    .device-unknown { background: #d1d5db; color: #374151; }
+    .device-model { color: #9ca3af; font-size: 11px; display: block; }
+    .io-unavailable { color: #6b7280; font-style: italic; font-size: 13px; text-align: center; padding: 20px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<p class="subtitle">Distributed encoding across multiple machines</p>
+
+{% if not cluster_enabled %}
+<div class="card">
+    <div class="cluster-disabled">
+        <h3>Cluster Mode Disabled</h3>
+        <p style="margin-bottom: 24px;">Enable cluster mode to distribute encoding across multiple machines.</p>
+
+        <div id="enable-form" style="text-align: left; max-width: 400px; margin: 0 auto;">
+            <div style="margin-bottom: 16px;">
+                <label style="display: block; font-weight: 600; margin-bottom: 6px; color: #374151;">
+                    Node Name (this machine's identifier)
+                </label>
+                <input type="text" id="node-name" value="{{ hostname }}"
+                       style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
+                    Used to identify this node in the cluster
+                </div>
+            </div>
+
+            <div style="margin-bottom: 16px;">
+                <label style="display: block; font-weight: 600; margin-bottom: 6px; color: #374151;">
+                    Cluster Peers (optional)
+                </label>
+                <input type="text" id="cluster-peers" value=""
+                       placeholder="name:host:port name:host:port"
+                       style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+                <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
+                    Space-separated "name:host:port" entries (e.g., "plex:192.168.1.50:5000")
+                </div>
+            </div>
+
+            <button onclick="enableCluster()" class="refresh-btn" style="width: 100%; padding: 12px;">
+                Enable Cluster Mode
+            </button>
+
+            <div id="enable-status" style="margin-top: 12px; display: none;"></div>
+        </div>
+
+        <p style="margin-top: 24px; font-size: 13px;">
+            Or edit the full configuration at <a href="/config" style="color: #3b82f6;">/config</a>
+        </p>
+    </div>
+</div>
+{% else %}
+
+<div class="grid">
+    <!-- This Node -->
+    <div class="node-card this-node">
+        <div class="node-header">
+            <span class="node-name">
+                <span class="status-dot status-online"></span>
+                {{ this_node.node_name or "This Node" }} (local)
+            </span>
+            <span class="badge badge-{{ 'local' if this_node.transfer_mode == 'local' else 'remote' }}">
+                {{ this_node.transfer_mode }} transfer
+            </span>
+        </div>
+        <div class="node-stats">
+            <div class="stat-box">
+                <div class="stat-value">{{ "%.1f"|format(this_node.capacity.load_1m) }}</div>
+                <div class="stat-label">Load (1m)</div>
+                <div class="progress-bar">
+                    <div class="progress-fill {% if this_node.capacity.load_1m > this_node.capacity.max_load %}high{% elif this_node.capacity.load_1m > this_node.capacity.max_load * 0.7 %}medium{% endif %}"
+                         style="width: {{ [100, (this_node.capacity.load_1m / this_node.capacity.max_load * 100)|int]|min }}%"></div>
+                </div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value">{{ this_node.capacity.slots_free }}/{{ this_node.capacity.slots_total }}</div>
+                <div class="stat-label">Slots Free</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value">{{ this_node.capacity.queue_depth }}</div>
+                <div class="stat-label">Queue</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value">{{ this_node.capacity.cpu_count }}</div>
+                <div class="stat-label">CPUs</div>
+            </div>
+        </div>
+        <div class="meta" style="margin-top: 12px;">
+            Max load threshold: {{ "%.1f"|format(this_node.capacity.max_load) }} |
+            Status: <span class="badge badge-{{ 'available' if this_node.capacity.available else 'busy' }}">
+                {{ 'available' if this_node.capacity.available else 'busy' }}
+            </span>
+        </div>
+    </div>
+
+    <!-- Peer Nodes -->
+    {% for peer in peers %}
+    <div class="node-card {% if not peer.online %}offline{% endif %}">
+        <div class="node-header">
+            <span class="node-name">
+                <span class="status-dot status-{{ 'online' if peer.online else 'offline' }}"></span>
+                {{ peer.name }}
+            </span>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="badge badge-{{ 'online' if peer.online else 'offline' }}">
+                    {{ 'online' if peer.online else 'offline' }}
+                </span>
+                <button class="remove-peer-btn" onclick="removePeer('{{ peer.name }}')" title="Remove peer">&#10005;</button>
+            </div>
+        </div>
+        {% if peer.online and peer.capacity %}
+        <div class="node-stats">
+            <div class="stat-box">
+                <div class="stat-value">{{ "%.1f"|format(peer.capacity.load_1m) }}</div>
+                <div class="stat-label">Load (1m)</div>
+                <div class="progress-bar">
+                    <div class="progress-fill {% if peer.capacity.load_1m > peer.capacity.max_load %}high{% elif peer.capacity.load_1m > peer.capacity.max_load * 0.7 %}medium{% endif %}"
+                         style="width: {{ [100, (peer.capacity.load_1m / peer.capacity.max_load * 100)|int]|min }}%"></div>
+                </div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value">{{ peer.capacity.slots_free }}/{{ peer.capacity.slots_total }}</div>
+                <div class="stat-label">Slots Free</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value">{{ peer.capacity.queue_depth }}</div>
+                <div class="stat-label">Queue</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value">{{ peer.capacity.cpu_count }}</div>
+                <div class="stat-label">CPUs</div>
+            </div>
+        </div>
+        <div class="meta" style="margin-top: 12px;">
+            {{ peer.host }}:{{ peer.port }} |
+            Transfer: {{ peer.capacity.transfer_mode }} |
+            <span class="badge badge-{{ 'available' if peer.capacity.available else 'busy' }}">
+                {{ 'available' if peer.capacity.available else 'busy' }}
+            </span>
+        </div>
+        {% else %}
+        <div class="meta" style="margin-top: 12px;">
+            {{ peer.host }}:{{ peer.port }} | Unable to connect
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+
+    <!-- Add Worker Card -->
+    <div class="node-card add-worker-card">
+        <div class="node-header">
+            <span class="node-name">+ Add Worker</span>
+        </div>
+        <div style="padding: 12px 0;">
+            <div style="margin-bottom: 10px;">
+                <label style="display: block; font-size: 12px; color: #888; margin-bottom: 4px;">Name</label>
+                <input type="text" id="new-peer-name" placeholder="e.g. plex-server"
+                       style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 14px;">
+            </div>
+            <div style="margin-bottom: 10px;">
+                <label style="display: block; font-size: 12px; color: #888; margin-bottom: 4px;">Host</label>
+                <input type="text" id="new-peer-host" placeholder="e.g. 192.168.1.50"
+                       style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 14px;">
+            </div>
+            <div style="margin-bottom: 12px;">
+                <label style="display: block; font-size: 12px; color: #888; margin-bottom: 4px;">Port</label>
+                <input type="text" id="new-peer-port" placeholder="5000" value="5000"
+                       style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 14px;">
+            </div>
+            <button onclick="addPeer()" class="action-btn" style="width: 100%;">Add Worker</button>
+        </div>
+    </div>
+</div>
+
+<!-- Distributed Jobs -->
+<div class="card card-full">
+    <h2>Distributed Jobs</h2>
+    {% if distributed_jobs %}
+    <table>
+        <tr>
+            <th>Title</th>
+            <th>Destination</th>
+            <th>State</th>
+            <th>Timestamp</th>
+        </tr>
+        {% for job in distributed_jobs %}
+        <tr>
+            <td><strong>{{ job.title }}</strong></td>
+            <td>
+                <span class="badge badge-remote">{{ job.dest_node }}</span>
+            </td>
+            <td>{{ job.state }}</td>
+            <td class="meta">{{ job.timestamp }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    {% else %}
+    <div class="empty-state">
+        No jobs currently distributed to peers
+    </div>
+    {% endif %}
+</div>
+
+<!-- Received Jobs (from other nodes) -->
+<div class="card card-full">
+    <h2>Jobs Received from Peers</h2>
+    {% if received_jobs %}
+    <table>
+        <tr>
+            <th>Title</th>
+            <th>Origin</th>
+            <th>State</th>
+            <th>Received</th>
+        </tr>
+        {% for job in received_jobs %}
+        <tr>
+            <td><strong>{{ job.title }}</strong></td>
+            <td>
+                <span class="badge badge-local">{{ job.origin_node }}</span>
+            </td>
+            <td>{{ job.state }}</td>
+            <td class="meta">{{ job.received_at or job.timestamp }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    {% else %}
+    <div class="empty-state">
+        No jobs received from peers
+    </div>
+    {% endif %}
+</div>
+
+<!-- Storage & I/O -->
+<div class="card card-full">
+    <h2>Storage & I/O</h2>
+    {% if io.available %}
+    <div class="io-summary">
+        <div class="io-stat">
+            <span class="io-value">{{ "%.1f"|format(io.total_read_mb_s) }}</span>
+            <span class="io-label">MB/s Read</span>
+        </div>
+        <div class="io-stat">
+            <span class="io-value">{{ "%.1f"|format(io.total_write_mb_s) }}</span>
+            <span class="io-label">MB/s Write</span>
+        </div>
+        <div class="io-stat">
+            <span class="io-value {% if io.iowait_percent > 20 %}io-warn{% endif %}">{{ "%.1f"|format(io.iowait_percent) }}%</span>
+            <span class="io-label">I/O Wait</span>
+        </div>
+    </div>
+    {% if io.devices %}
+    <table>
+        <tr>
+            <th>Device</th>
+            <th>Type</th>
+            <th>Size</th>
+            <th>Mount</th>
+            <th>Read</th>
+            <th>Write</th>
+        </tr>
+        {% for dev in io.devices %}
+        <tr>
+            <td>{{ dev.name }}{% if dev.model %}<span class="device-model">{{ dev.model }}</span>{% endif %}</td>
+            <td><span class="device-badge device-{{ dev.type }}">{{ dev.type }}</span></td>
+            <td>{{ dev.size }}</td>
+            <td>{{ dev.mountpoint or '-' }}</td>
+            <td>{{ "%.1f"|format(dev.read_mb_s) }} MB/s</td>
+            <td>{{ "%.1f"|format(dev.write_mb_s) }} MB/s</td>
+        </tr>
+        {% endfor %}
+    </table>
+    {% else %}
+    <p class="io-unavailable">No block devices detected</p>
+    {% endif %}
+    {% else %}
+    <p class="io-unavailable">
+        {% if io.error %}
+        {{ io.error }}
+        {% else %}
+        I/O statistics not available
+        {% endif %}
+    </p>
+    {% endif %}
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+{% if not cluster_enabled %}
+async function enableCluster() {
+    const nodeName = document.getElementById('node-name').value.trim();
+    const peers = document.getElementById('cluster-peers').value.trim();
+    const statusEl = document.getElementById('enable-status');
+
+    if (!nodeName) {
+        statusEl.style.display = 'block';
+        statusEl.style.background = '#fee2e2';
+        statusEl.style.color = '#991b1b';
+        statusEl.style.padding = '10px';
+        statusEl.style.borderRadius = '6px';
+        statusEl.textContent = 'Please enter a node name';
+        return;
+    }
+
+    statusEl.style.display = 'block';
+    statusEl.style.background = '#dbeafe';
+    statusEl.style.color = '#1e40af';
+    statusEl.style.padding = '10px';
+    statusEl.style.borderRadius = '6px';
+    statusEl.textContent = 'Saving configuration...';
+
+    try {
+        const settings = {
+            'CLUSTER_ENABLED': '1',
+            'CLUSTER_NODE_NAME': nodeName
+        };
+        if (peers) {
+            settings['CLUSTER_PEERS'] = peers;
+        }
+
+        const response = await fetch('/api/config/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ settings: settings })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            statusEl.style.background = '#d1fae5';
+            statusEl.style.color = '#065f46';
+            statusEl.innerHTML = 'Cluster mode enabled! <a href="/cluster" style="color: #065f46; font-weight: 600;">Reload page</a> to see cluster status.';
+
+            // Auto-reload after a short delay
+            setTimeout(() => {
+                window.location.reload();
+            }, 1500);
+        } else {
+            statusEl.style.background = '#fee2e2';
+            statusEl.style.color = '#991b1b';
+            statusEl.textContent = 'Error: ' + result.message;
+        }
+    } catch (err) {
+        statusEl.style.background = '#fee2e2';
+        statusEl.style.color = '#991b1b';
+        statusEl.textContent = 'Error: ' + err.message;
+    }
+}
+{% else %}
+// Auto-refresh every 30 seconds
+setTimeout(function() {
+    location.reload();
+}, 30000);
+
+// Current peers from server (for add/remove operations)
+const currentPeers = {{ peers_raw | tojson | safe }};
+
+async function addPeer() {
+    const name = document.getElementById('new-peer-name').value.trim();
+    const host = document.getElementById('new-peer-host').value.trim();
+    const port = document.getElementById('new-peer-port').value.trim() || '5000';
+
+    if (!name || !host) {
+        alert('Name and Host are required');
+        return;
+    }
+
+    // Validate port is numeric
+    if (!/^\d+$/.test(port)) {
+        alert('Port must be a number');
+        return;
+    }
+
+    // Build new peer string
+    const newPeer = `${name}:${host}:${port}`;
+    const updatedPeers = currentPeers ? `${currentPeers} ${newPeer}` : newPeer;
+
+    try {
+        const response = await fetch('/api/config/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ settings: { 'CLUSTER_PEERS': updatedPeers } })
+        });
+
+        const result = await response.json();
+        if (result.success) {
+            window.location.reload();
+        } else {
+            alert('Error: ' + result.message);
+        }
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+async function removePeer(peerName) {
+    if (!confirm(`Remove worker "${peerName}" from cluster?`)) {
+        return;
+    }
+
+    // Parse current peers and filter out the one to remove
+    const peers = currentPeers.split(/\s+/).filter(p => p.trim());
+    const updatedPeers = peers.filter(p => !p.startsWith(peerName + ':')).join(' ');
+
+    try {
+        const response = await fetch('/api/config/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ settings: { 'CLUSTER_PEERS': updatedPeers } })
+        });
+
+        const result = await response.json();
+        if (result.success) {
+            window.location.reload();
+        } else {
+            alert('Error: ' + result.message);
+        }
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+{% endif %}
+</script>
+{% endblock %}

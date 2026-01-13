@@ -93,6 +93,27 @@ if [[ -d "$PAGES_SOURCE" ]]; then
     chmod 644 "$INSTALL_BIN/pages"/*.py
 fi
 
+# Install templates directory if it exists (Jinja2 templates)
+TEMPLATES_SOURCE="$SOURCE_DIR/web/templates"
+if [[ -d "$TEMPLATES_SOURCE" ]]; then
+    print_info "Installing templates..."
+    mkdir -p "$INSTALL_BIN/templates"
+    cp -r "$TEMPLATES_SOURCE"/* "$INSTALL_BIN/templates/"
+    chmod 755 "$INSTALL_BIN/templates"
+    chmod 644 "$INSTALL_BIN/templates"/*.html
+fi
+
+# Install static directory if it exists (CSS, JS, images)
+STATIC_SOURCE="$SOURCE_DIR/web/static"
+if [[ -d "$STATIC_SOURCE" ]]; then
+    print_info "Installing static files..."
+    mkdir -p "$INSTALL_BIN/static"
+    cp -r "$STATIC_SOURCE"/* "$INSTALL_BIN/static/"
+    chmod -R 755 "$INSTALL_BIN/static"
+    find "$INSTALL_BIN/static" -type f -name "*.css" -exec chmod 644 {} \;
+    find "$INSTALL_BIN/static" -type f -name "*.js" -exec chmod 644 {} \;
+fi
+
 # Install systemd service if source exists
 if [[ -f "$SERVICE_SOURCE" ]]; then
     print_info "Installing systemd service..."

@@ -1,0 +1,319 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block meta %}
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="30">
+{% endblock %}
+
+{% block header %}DVD Ripper Dashboard{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Queue action buttons */
+    .queue-actions { white-space: nowrap; }
+    .btn-distribute { background: #8b5cf6; color: white; }
+    .btn-distribute:hover { background: #7c3aed; }
+    .btn-distribute:disabled { background: #9ca3af; cursor: not-allowed; }
+    .btn-cancel { background: #ef4444; color: white; font-weight: bold; min-width: 24px; }
+    .btn-cancel:hover { background: #dc2626; }
+    /* Cancel modal */
+    .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                     background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center; }
+    .modal-overlay.active { display: flex; }
+    .modal { background: white; padding: 24px; border-radius: 8px; max-width: 400px; width: 90%; }
+    .modal h3 { margin: 0 0 16px 0; }
+    .modal-buttons { display: flex; gap: 12px; margin-top: 20px; justify-content: flex-end; }
+    .btn-modal-cancel { background: #e5e7eb; color: #374151; }
+    .btn-modal-cancel:hover { background: #d1d5db; }
+    .btn-modal-confirm { background: #ef4444; color: white; }
+    .btn-modal-confirm:hover { background: #dc2626; }
+    /* Lock status */
+    .lock-status { display: flex; gap: 20px; flex-wrap: wrap; }
+    .lock-item { display: flex; align-items: center; gap: 8px; }
+    .lock-dot { width: 12px; height: 12px; border-radius: 50%; }
+    .lock-active { background: #10b981; animation: pulse 2s infinite; }
+    .lock-idle { background: #d1d5db; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    /* Progress */
+    .progress-section { margin-top: 16px; }
+    .progress-item { margin-bottom: 12px; }
+    .progress-header { display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 13px; }
+    .progress-label { font-weight: 500; }
+    .progress-stats { color: #666; }
+    .progress-bar { background: #e5e7eb; height: 8px; border-radius: 4px; overflow: hidden; }
+    .progress-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+    .progress-iso { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+    .progress-encoder { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
+    .progress-distributing { background: linear-gradient(90deg, #ec4899, #f472b6); }
+    .progress-transfer { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
+    .progress-archive { background: linear-gradient(90deg, #10b981, #059669); }
+    .progress-receiving {
+        background: linear-gradient(90deg, #10b981, #34d399);
+        animation: pulse-receiving 2s ease-in-out infinite;
+    }
+    @keyframes pulse-receiving {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+    }
+    /* Disk usage */
+    .disk-bar { background: #e5e7eb; height: 24px; border-radius: 12px; overflow: hidden; }
+    .disk-fill { height: 100%; transition: width 0.3s; display: flex; align-items: center;
+                 justify-content: center; color: white; font-size: 12px; font-weight: 600;
+                 min-width: 40px; }
+    .disk-ok { background: #10b981; }
+    .disk-warn { background: #f59e0b; }
+    .disk-danger { background: #ef4444; }
+    /* Queue */
+    .queue-empty { color: #666; font-style: italic; padding: 20px 0; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="grid">
+    <div class="card">
+        <h2>Pipeline Status</h2>
+        <table>
+            <tr><th>Stage</th><th>Count</th><th>Action</th></tr>
+            {% for state, count in counts.items() %}
+            <tr>
+                <td><span class="status-badge state-{{ state }}">{{ state }}</span></td>
+                <td><strong>{{ count }}</strong></td>
+                <td>
+                    {% if state == 'iso-ready' and count > 0 %}
+                    <form method="POST" action="/api/trigger/encoder" style="display:inline">
+                        <button class="btn btn-primary" type="submit"
+                                {% if locks.encoder.active %}disabled title="Encoder already running"{% endif %}>
+                            Run Encoder
+                        </button>
+                    </form>
+                    {% elif state == 'encoded-ready' and count > 0 %}
+                    <form method="POST" action="/api/trigger/transfer" style="display:inline">
+                        <button class="btn btn-primary" type="submit"
+                                {% if locks.transfer.active %}disabled title="Transfer already running"{% endif %}>
+                            Run Transfer
+                        </button>
+                    </form>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    <div class="card">
+        <h2>Disk Usage</h2>
+        <div class="disk-bar">
+            <div class="disk-fill {% if disk.percent_num >= 80 %}disk-danger{% elif disk.percent_num >= 60 %}disk-warn{% else %}disk-ok{% endif %}"
+                 style="width: {{ disk.percent }}%">{{ disk.percent }}%</div>
+        </div>
+        <p style="margin: 12px 0 0 0; font-size: 14px;">
+            <strong>{{ disk.used }}</strong> used of <strong>{{ disk.total }}</strong>
+            (<strong>{{ disk.available }}</strong> free)
+        </p>
+        <p style="margin: 4px 0 0 0; font-size: 12px; color: #666;">
+            Mount: {{ disk.mount }}
+        </p>
+    </div>
+
+    <div class="card">
+        <h2>Active Processes</h2>
+        <div class="lock-status">
+            {% for stage, status in locks.items() %}
+            {% if stage == 'iso' %}
+            {# Per-drive ISO status #}
+            {% if status.drives %}
+            {% for drive, drive_status in status.drives.items() %}
+            <div class="lock-item">
+                <div class="lock-dot {% if drive_status.active %}lock-active{% else %}lock-idle{% endif %}"></div>
+                <span>
+                    <strong>iso ({{ drive }})</strong>
+                    {% if drive_status.active %}<span style="color: #666;">(PID {{ drive_status.pid }})</span>{% endif %}
+                </span>
+            </div>
+            {% endfor %}
+            {% else %}
+            {# No drives detected, show generic ISO status #}
+            <div class="lock-item">
+                <div class="lock-dot lock-idle"></div>
+                <span><strong>iso</strong></span>
+            </div>
+            {% endif %}
+            {% else %}
+            <div class="lock-item">
+                <div class="lock-dot {% if status.active %}lock-active{% else %}lock-idle{% endif %}"></div>
+                <span>
+                    <strong>{{ stage }}</strong>
+                    {% if status.active %}<span style="color: #666;">(PID {{ status.pid }})</span>{% endif %}
+                </span>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+        <div class="progress-section" id="progress-section">
+            {% if progress.iso %}
+            {% for iso in progress.iso %}
+            <div class="progress-item">
+                <div class="progress-header">
+                    <span class="progress-label">ISO Creation ({{ iso.drive }})</span>
+                    <span class="progress-stats">{{ "%.1f"|format(iso.percent) }}% | ETA: {{ iso.eta }}</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill progress-iso" style="width: {{ iso.percent }}%"></div>
+                </div>
+            </div>
+            {% endfor %}
+            {% endif %}
+            {% if progress.encoder %}
+            {% for enc in progress.encoder %}
+            <div class="progress-item">
+                <div class="progress-header">
+                    <span class="progress-label">Encoding: {{ enc.title }}</span>
+                    <span class="progress-stats">{{ "%.1f"|format(enc.percent) }}% | {{ enc.speed }} | ETA: {{ enc.eta }}</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill progress-encoder" style="width: {{ enc.percent }}%"></div>
+                </div>
+            </div>
+            {% endfor %}
+            {% endif %}
+            {% if progress.distributing %}
+            <div class="progress-item">
+                <div class="progress-header">
+                    <span class="progress-label">Distributing to Cluster</span>
+                    <span class="progress-stats">{{ "%.1f"|format(progress.distributing.percent) }}% | {{ progress.distributing.speed }} | ETA: {{ progress.distributing.eta }}</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill progress-distributing" style="width: {{ progress.distributing.percent }}%"></div>
+                </div>
+            </div>
+            {% endif %}
+            {% if progress.transfer %}
+            {% for xfer in progress.transfer %}
+            <div class="progress-item">
+                <div class="progress-header">
+                    <span class="progress-label">Transfer: {{ xfer.title }}</span>
+                    <span class="progress-stats">{{ "%.1f"|format(xfer.percent) }}% | {{ xfer.speed }} | ETA: {{ xfer.eta }}</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill progress-transfer" style="width: {{ xfer.percent }}%"></div>
+                </div>
+            </div>
+            {% endfor %}
+            {% endif %}
+            {% if progress.archive %}
+            {% for arch in progress.archive %}
+            <div class="progress-item">
+                <div class="progress-header">
+                    <span class="progress-label">Archiving: {{ arch.title }}{% if arch.started_time %} (started {{ arch.started_time }}){% endif %}</span>
+                    <span class="progress-stats">{{ "%.1f"|format(arch.percent) }}% | {{ arch.speed }} | ETA: {{ arch.eta }}</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill progress-archive" style="width: {{ arch.percent }}%"></div>
+                </div>
+            </div>
+            {% endfor %}
+            {% endif %}
+            {% if progress.receiving %}
+            {% for recv in progress.receiving %}
+            <div class="progress-item">
+                <div class="progress-header">
+                    <span class="progress-label">Receiving: {{ recv.filename | replace('_', ' ') }}</span>
+                    <span class="progress-stats">{{ recv.size_mb }} MB received</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill progress-receiving" style="width: 100%"></div>
+                </div>
+            </div>
+            {% endfor %}
+            {% endif %}
+            {% if not progress.iso and not progress.encoder and not progress.distributing and not progress.transfer and not progress.archive and not progress.receiving %}
+            <p style="color: #666; font-size: 13px; margin: 12px 0 0 0;">No active operations</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="card" style="margin-top: 16px;">
+    <h2>Queue ({{ queue_total }} items)</h2>
+    {% if queue %}
+    <table>
+        <tr><th>Title</th><th>Year</th><th>State</th><th>Created</th><th style="width: 120px;">Actions</th></tr>
+        {% for item in queue %}
+        <tr>
+            <td>{{ item.metadata.get('title', 'Unknown') | replace('_', ' ') }}</td>
+            <td>{{ item.metadata.get('year', '-') or '-' }}</td>
+            <td><span class="status-badge state-{{ item.state }}">{{ item.state }}</span></td>
+            <td style="font-size: 12px; color: #666;">{{ item.metadata.get('created_at', 'N/A')[:19] }}</td>
+            <td class="queue-actions">
+                {% if item.state == 'iso-ready' and cluster_enabled %}
+                <button class="btn btn-sm btn-distribute" onclick="triggerDistribute()"
+                        {% if locks.distribute and locks.distribute.active %}disabled title="Distribution in progress"{% endif %}>
+                    Distribute
+                </button>
+                {% endif %}
+                {% if item.state in ['iso-creating', 'iso-ready', 'distributing', 'encoding', 'encoded-ready', 'transferring'] %}
+                <button class="btn btn-sm btn-cancel"
+                        onclick="confirmCancel('{{ item.file }}', '{{ item.state }}', '{{ item.metadata.get('title', 'Unknown') | replace('_', ' ') | e }}')"
+                        title="Cancel">
+                    &times;
+                </button>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+    {% if queue_total_pages > 1 %}
+    <div class="pagination">
+        {% if queue_page > 1 %}
+        <a href="?page={{ queue_page - 1 }}">&laquo; Prev</a>
+        {% else %}
+        <span class="disabled">&laquo; Prev</span>
+        {% endif %}
+        {% for p in range(1, queue_total_pages + 1) %}
+            {% if p == queue_page %}
+            <span class="current">{{ p }}</span>
+            {% elif p == 1 or p == queue_total_pages or (p >= queue_page - 1 and p <= queue_page + 1) %}
+            <a href="?page={{ p }}">{{ p }}</a>
+            {% elif p == 2 and queue_page > 3 %}
+            <span class="ellipsis">...</span>
+            {% elif p == queue_total_pages - 1 and queue_page < queue_total_pages - 2 %}
+            <span class="ellipsis">...</span>
+            {% endif %}
+        {% endfor %}
+        {% if queue_page < queue_total_pages %}
+        <a href="?page={{ queue_page + 1 }}">Next &raquo;</a>
+        {% else %}
+        <span class="disabled">Next &raquo;</span>
+        {% endif %}
+    </div>
+    {% endif %}
+    {% else %}
+    <p class="queue-empty">No items in queue. Insert a DVD to start ripping.</p>
+    {% endif %}
+</div>
+
+<!-- Cancel Modal -->
+<div id="cancel-modal" class="modal-overlay">
+    <div class="modal">
+        <h3>Cancel Queue Item</h3>
+        <p>Are you sure you want to cancel <strong id="cancel-title"></strong>?</p>
+        <p id="cancel-warning" style="color: #f59e0b; display: none;"></p>
+        <div id="delete-files-option" style="margin: 12px 0; display: none;">
+            <label>
+                <input type="checkbox" id="delete-files-checkbox">
+                Also delete media file (ISO/MKV)
+            </label>
+        </div>
+        <div class="modal-buttons">
+            <button class="btn btn-modal-cancel" onclick="closeCancelModal()">Keep Item</button>
+            <button class="btn btn-modal-confirm" onclick="executeCancel()">Cancel Item</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}

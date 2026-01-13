@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+
+{% block title %}Services{% endblock %}
+
+{% block meta %}
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="30">
+{% endblock %}
+
+{% block header %}<a href="/">Dashboard</a> / Service Status{% endblock %}
+
+{% block extra_css %}
+<style>
+    .subtitle { color: #666; margin-bottom: 20px; }
+    .status-dot {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        margin-right: 8px;
+    }
+    .status-active { background: #10b981; }
+    .status-inactive { background: #ef4444; }
+    .status-unknown { background: #9ca3af; }
+    .badge-active { background: #d1fae5; color: #065f46; }
+    .badge-inactive { background: #fee2e2; color: #991b1b; }
+    .badge-enabled { background: #dbeafe; color: #1e40af; }
+    .badge-disabled { background: #f3f4f6; color: #6b7280; }
+    .btn-start { background: #10b981; color: white; }
+    .btn-start:hover { background: #059669; }
+    .btn-stop { background: #ef4444; color: white; }
+    .btn-stop:hover { background: #dc2626; }
+    .btn-restart { background: #f59e0b; color: white; }
+    .btn-restart:hover { background: #d97706; }
+    .btn-pause { background: #6b7280; color: white; }
+    .btn-pause:hover { background: #4b5563; }
+    .btn-unpause { background: #3b82f6; color: white; }
+    .btn-unpause:hover { background: #2563eb; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .meta { font-size: 12px; color: #6b7280; margin-top: 4px; }
+    .refresh-note { font-size: 12px; color: #666; margin-top: 12px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<p class="subtitle">Manage DVD ripper services and timers</p>
+
+<div class="grid">
+    <div class="card">
+        <h2>Services</h2>
+        <table>
+            <tr>
+                <th>Service</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+            {% for svc in services %}
+            <tr>
+                <td>
+                    <span class="status-dot {% if svc.active %}status-active{% else %}status-inactive{% endif %}"></span>
+                    <strong>{{ svc.description }}</strong>
+                    <div class="meta">{{ svc.name }}.service</div>
+                </td>
+                <td>
+                    <span class="badge {% if svc.active %}badge-active{% else %}badge-inactive{% endif %}">
+                        {{ svc.state }}
+                    </span>
+                    {% if svc.active and svc.pid != "0" %}
+                    <div class="meta">PID: {{ svc.pid }}</div>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if svc.name != "dvd-dashboard" %}
+                    <form method="POST" action="/api/service/{{ svc.name }}" style="display:inline">
+                        {% if svc.active %}
+                        <input type="hidden" name="action" value="stop">
+                        <button class="btn btn-stop" type="submit">Stop</button>
+                        {% else %}
+                        <input type="hidden" name="action" value="start">
+                        <button class="btn btn-start" type="submit">Start</button>
+                        {% endif %}
+                    </form>
+                    <form method="POST" action="/api/service/{{ svc.name }}" style="display:inline">
+                        <input type="hidden" name="action" value="restart">
+                        <button class="btn btn-restart" type="submit" {% if not svc.active %}disabled{% endif %}>Restart</button>
+                    </form>
+                    {% else %}
+                    <span class="meta">Cannot control from UI</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    <div class="card">
+        <h2>Timers (Triggers)</h2>
+        <table>
+            <tr>
+                <th>Timer</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+            {% for tmr in timers %}
+            <tr>
+                <td>
+                    <span class="status-dot {% if tmr.active %}status-active{% else %}status-inactive{% endif %}"></span>
+                    <strong>{{ tmr.description }}</strong>
+                    <div class="meta">{{ tmr.name }}.timer</div>
+                </td>
+                <td>
+                    <span class="badge {% if tmr.active %}badge-active{% else %}badge-inactive{% endif %}">
+                        {% if tmr.active %}running{% else %}paused{% endif %}
+                    </span>
+                    <span class="badge {% if tmr.enabled %}badge-enabled{% else %}badge-disabled{% endif %}">
+                        {% if tmr.enabled %}enabled{% else %}disabled{% endif %}
+                    </span>
+                    {% if tmr.next_trigger %}
+                    <div class="meta">Next: {{ tmr.next_trigger }}</div>
+                    {% endif %}
+                </td>
+                <td>
+                    <form method="POST" action="/api/timer/{{ tmr.name }}" style="display:inline">
+                        {% if tmr.active %}
+                        <input type="hidden" name="action" value="stop">
+                        <button class="btn btn-pause" type="submit">Pause</button>
+                        {% else %}
+                        <input type="hidden" name="action" value="start">
+                        <button class="btn btn-unpause" type="submit">Unpause</button>
+                        {% endif %}
+                    </form>
+                    <form method="POST" action="/api/timer/{{ tmr.name }}" style="display:inline">
+                        {% if tmr.enabled %}
+                        <input type="hidden" name="action" value="disable">
+                        <button class="btn btn-stop" type="submit">Disable</button>
+                        {% else %}
+                        <input type="hidden" name="action" value="enable">
+                        <button class="btn btn-start" type="submit">Enable</button>
+                        {% endif %}
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+        <p class="refresh-note">
+            <strong>Pause</strong> = temporarily stop timer (until next reboot)<br>
+            <strong>Disable</strong> = permanently stop timer (survives reboot)
+        </p>
+    </div>
+
+    <div class="card">
+        <h2>Disc Detection (udev)</h2>
+        <table>
+            <tr>
+                <th>Trigger</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+            <tr>
+                <td>
+                    <span class="status-dot {% if udev_trigger.enabled %}status-active{% elif udev_trigger.status == 'missing' %}status-unknown{% else %}status-inactive{% endif %}"></span>
+                    <strong>DVD Insert Detection</strong>
+                    <div class="meta">99-dvd-ripper.rules</div>
+                </td>
+                <td>
+                    <span class="badge {% if udev_trigger.enabled %}badge-active{% elif udev_trigger.status == 'missing' %}badge-disabled{% else %}badge-inactive{% endif %}">
+                        {{ udev_trigger.status }}
+                    </span>
+                    <div class="meta">{{ udev_trigger.message }}</div>
+                </td>
+                <td>
+                    {% if udev_trigger.status != 'missing' %}
+                    <form method="POST" action="/api/udev/{% if udev_trigger.enabled %}pause{% else %}resume{% endif %}" style="display:inline">
+                        {% if udev_trigger.enabled %}
+                        <button class="btn btn-pause" type="submit">Pause</button>
+                        {% else %}
+                        <button class="btn btn-unpause" type="submit">Resume</button>
+                        {% endif %}
+                    </form>
+                    {% else %}
+                    <span class="meta">Run remote-install.sh to install</span>
+                    {% endif %}
+                </td>
+            </tr>
+        </table>
+        <p class="refresh-note">
+            <strong>Pause</strong> = disable disc detection for manual operations<br>
+            <strong>Resume</strong> = re-enable automatic disc detection
+        </p>
+    </div>
+</div>
+{% endblock %}

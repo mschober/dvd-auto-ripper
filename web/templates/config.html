@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+
+{% block title %}Configuration{% endblock %}
+
+{% block header %}<a href="/">Dashboard</a> / Configuration{% endblock %}
+
+{% block extra_css %}
+<style>
+    .subtitle { color: #666; margin-bottom: 20px; }
+    .section {
+        background: white;
+        border-radius: 8px;
+        margin-bottom: 12px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        overflow: hidden;
+    }
+    .section-header {
+        padding: 14px 16px;
+        background: #f9fafb;
+        border-bottom: 1px solid #e5e7eb;
+        cursor: pointer;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        user-select: none;
+    }
+    .section-header:hover { background: #f3f4f6; }
+    .section-title {
+        font-weight: 600;
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: #374151;
+    }
+    .section-toggle {
+        font-size: 12px;
+        color: #6b7280;
+        transition: transform 0.2s;
+    }
+    .section.collapsed .section-toggle { transform: rotate(-90deg); }
+    .section.collapsed .section-content { display: none; }
+    .section-content { padding: 16px; }
+
+    .setting-row {
+        display: flex;
+        align-items: center;
+        padding: 10px 0;
+        border-bottom: 1px solid #f3f4f6;
+    }
+    .setting-row:last-child { border-bottom: none; }
+    .setting-label {
+        flex: 0 0 220px;
+        font-family: monospace;
+        font-size: 13px;
+        color: #4b5563;
+    }
+    .setting-input {
+        flex: 1;
+    }
+    .setting-input input[type="text"],
+    .setting-input input[type="number"],
+    .setting-input select {
+        width: 100%;
+        padding: 8px 12px;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        font-size: 14px;
+        font-family: inherit;
+    }
+    .setting-input input:focus,
+    .setting-input select:focus {
+        outline: none;
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    }
+
+    /* Toggle switch for booleans */
+    .toggle-switch {
+        position: relative;
+        width: 50px;
+        height: 26px;
+    }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: #d1d5db;
+        border-radius: 26px;
+        transition: 0.3s;
+    }
+    .toggle-slider:before {
+        position: absolute;
+        content: "";
+        height: 20px; width: 20px;
+        left: 3px; bottom: 3px;
+        background: white;
+        border-radius: 50%;
+        transition: 0.3s;
+    }
+    .toggle-switch input:checked + .toggle-slider { background: #10b981; }
+    .toggle-switch input:checked + .toggle-slider:before { transform: translateX(24px); }
+    .toggle-label {
+        margin-left: 12px;
+        font-size: 13px;
+        color: #6b7280;
+    }
+
+    .actions {
+        position: sticky;
+        bottom: 0;
+        background: white;
+        padding: 16px 20px;
+        margin: 20px -20px -20px;
+        border-top: 1px solid #e5e7eb;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
+    }
+    .status-msg {
+        padding: 10px 16px;
+        border-radius: 6px;
+        font-size: 14px;
+        display: none;
+    }
+    .status-msg.show { display: block; }
+    .status-msg.success { background: #d1fae5; color: #065f46; }
+    .status-msg.error { background: #fee2e2; color: #991b1b; }
+
+    /* Restart modal */
+    .modal-overlay {
+        display: none;
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.5);
+        z-index: 1000;
+        align-items: center;
+        justify-content: center;
+    }
+    .modal-overlay.show { display: flex; }
+    .modal {
+        background: white;
+        border-radius: 12px;
+        padding: 24px;
+        max-width: 450px;
+        width: 90%;
+        box-shadow: 0 20px 40px rgba(0,0,0,0.2);
+    }
+    .modal h3 { margin: 0 0 16px 0; }
+    .modal-body { margin-bottom: 20px; }
+    .restart-item {
+        display: flex;
+        align-items: center;
+        padding: 10px 12px;
+        background: #f9fafb;
+        border-radius: 6px;
+        margin-bottom: 8px;
+    }
+    .restart-item input { margin-right: 12px; }
+    .restart-item label { flex: 1; cursor: pointer; }
+    .modal-actions { display: flex; gap: 12px; justify-content: flex-end; }
+</style>
+{% endblock %}
+
+{% block content %}
+<p class="subtitle">Edit settings and save to /etc/dvd-ripper.conf</p>
+
+<div id="status-msg" class="status-msg"></div>
+
+<form id="config-form">
+    {% for section in sections %}
+    <div class="section" id="section-{{ section.id }}">
+        <div class="section-header" onclick="toggleSection('{{ section.id }}')">
+            <span class="section-title">{{ section.title }}</span>
+            <span class="section-toggle">&#9660;</span>
+        </div>
+        <div class="section-content">
+            {% for key in section.keys %}
+            <div class="setting-row">
+                <div class="setting-label">{{ key }}</div>
+                <div class="setting-input">
+                    {% if key in boolean_settings %}
+                    <label class="toggle-switch">
+                        <input type="checkbox" name="{{ key }}" value="1" {% if config.get(key) == '1' %}checked{% endif %}>
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <span class="toggle-label">{% if config.get(key) == '1' %}Enabled{% else %}Disabled{% endif %}</span>
+                    {% elif key in dropdown_settings %}
+                    <select name="{{ key }}">
+                        {% for opt in dropdown_settings[key] %}
+                        <option value="{{ opt }}" {% if config.get(key) == opt %}selected{% endif %}>{{ opt }}</option>
+                        {% endfor %}
+                    </select>
+                    {% else %}
+                    <input type="text" name="{{ key }}" value="{{ config.get(key, '') }}">
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</form>
+
+<div class="actions">
+    <span id="change-count" style="color: #6b7280; font-size: 13px;"></span>
+    <div>
+        <button type="button" class="btn btn-secondary" onclick="resetForm()">Reset</button>
+        <button type="button" class="btn btn-primary" onclick="saveConfig()" id="save-btn">Save Changes</button>
+    </div>
+</div>
+
+<!-- Restart Modal -->
+<div class="modal-overlay" id="restart-modal">
+    <div class="modal">
+        <h3>Restart Services?</h3>
+        <div class="modal-body">
+            <p style="margin: 0 0 16px 0; color: #6b7280;">
+                The following services may need to be restarted for changes to take effect:
+            </p>
+            <div id="restart-services"></div>
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-secondary" onclick="closeModal()">Skip</button>
+            <button class="btn btn-primary" onclick="restartSelected()">Restart Selected</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const originalConfig = {{ config | tojson }};
+</script>
+<script src="{{ url_for('static', filename='js/config.js') }}"></script>
+{% endblock %}
