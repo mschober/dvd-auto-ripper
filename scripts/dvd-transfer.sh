@@ -487,7 +487,7 @@ main() {
         log_info "[TRANSFER] Starting worker for slot $slot: $(basename "$state_file")"
         transfer_worker "$state_file" "$slot" &
         pids+=($!)
-        ((jobs_started++))
+        ((++jobs_started))
     done
 
     if [[ $jobs_started -eq 0 ]]; then
