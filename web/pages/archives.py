@@ -70,6 +70,7 @@ def get_iso_archives():
             "iso_path": iso_file,
             "iso_size": iso_size,
             "deletable": deletable,
+            "archive_ready": False,  # New: .archive-ready marker exists
             "mapfile": None,
             "keys_dir": None,
             "keys_count": 0,
@@ -139,6 +140,16 @@ def get_iso_archives():
             except (json.JSONDecodeError, IOError):
                 pass
             break
+
+        # Check for .archive-ready marker (new approach - ISO ready for archival)
+        archive_ready_file = os.path.join(STAGING_DIR, f"{prefix}.iso.archive-ready")
+        if os.path.exists(archive_ready_file):
+            archive["archive_ready"] = True
+            try:
+                with open(archive_ready_file, 'r') as f:
+                    archive["archive_ready_metadata"] = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                pass
 
         # Check for archiving state (compression in progress)
         archiving_file = os.path.join(STAGING_DIR, f"{prefix}.archiving")
@@ -790,6 +801,8 @@ ARCHIVES_HTML = """
                                 </div>
                                 {% elif archive.state %}
                                 <span class="badge badge-state">{{ archive.state }}</span>
+                                {% elif archive.archive_ready %}
+                                <span class="badge badge-deletable">archive-ready</span>
                                 {% elif archive.deletable %}
                                 <span class="badge badge-deletable">deletable</span>
                                 {% else %}
@@ -804,7 +817,7 @@ ARCHIVES_HTML = """
                                     <span class="badge badge-archived">{{ format_size(archive.compressed_size) }}</span>
                                     <small class="compression-ratio">{{ "%.0f"|format((1 - archive.compressed_size / archive.iso_size) * 100) if archive.iso_size > 0 else 0 }}% saved</small>
                                 </div>
-                                {% elif archive.deletable and archive.state not in ['encoding', 'transferring', 'distributing'] %}
+                                {% elif (archive.archive_ready or archive.deletable) and archive.state not in ['encoding', 'transferring', 'distributing'] %}
                                 <button class="btn btn-archive" onclick="archiveNow('{{ archive.prefix }}')">
                                     Archive Now
                                 </button>
@@ -1353,6 +1366,15 @@ def api_archives_delete(prefix):
         except OSError as e:
             errors.append(f"State: {e}")
 
+    # Delete .archive-ready marker if it exists
+    archive_ready_file = os.path.join(STAGING_DIR, f"{prefix}.iso.archive-ready")
+    if os.path.exists(archive_ready_file):
+        try:
+            os.remove(archive_ready_file)
+            deleted.append(os.path.basename(archive_ready_file))
+        except OSError as e:
+            errors.append(f"Archive-ready marker: {e}")
+
     return jsonify({
         "status": "deleted" if not errors else "partial",
         "deleted": deleted,
@@ -1388,9 +1410,9 @@ def api_archives_archive_now():
     if archive.get("archived"):
         return jsonify({"error": "Already archived"}), 400
 
-    # Must be deletable to archive
-    if not archive.get("deletable"):
-        return jsonify({"error": "ISO must be in deletable state to archive"}), 400
+    # Must be archive-ready or deletable (legacy) to archive
+    if not archive.get("archive_ready") and not archive.get("deletable"):
+        return jsonify({"error": "ISO must be marked archive-ready to archive"}), 400
 
     # Don't archive if actively processing
     if archive["state"] in ["iso-creating", "encoding", "transferring", "distributing"]:

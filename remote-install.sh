@@ -905,6 +905,16 @@ create_directories() {
     chown root:dvd-ripper "$run_dir"
     print_info "✓ Runtime directory: $run_dir (mode 770, group dvd-ripper)"
 
+    # Create ISO archive directory for compressed ISOs
+    local archive_dir="/var/lib/dvd/archives"
+    if [[ ! -d "$archive_dir" ]]; then
+        mkdir -p "$archive_dir"
+    fi
+    # Set permissions: rwxrws--- (2775) - SGID ensures group inheritance, world readable
+    chmod 2775 "$archive_dir"
+    chown dvd-transfer:dvd-ripper "$archive_dir"
+    print_info "✓ Archive directory: $archive_dir (mode 2775, owner dvd-transfer)"
+
     # Create libdvdcss cache directory (service users have no home dirs)
     local dvdcss_cache="/var/cache/dvdcss"
     if [[ ! -d "$dvdcss_cache" ]]; then

@@ -330,8 +330,15 @@ ENABLE_PAR2_RECOVERY="1"
 # 10% = ~10% storage overhead, can recover from ~5% corruption
 PAR2_REDUNDANCY_PERCENT="5"
 
-# NAS archive path (separate from video library)
-# Where compressed ISOs are stored long-term
+# Local archive path for compressed ISOs (separate from video library)
+# Where compressed ISOs are stored long-term on this machine
+# For machines that ARE the NAS/media server, use a local path
+# Example: ISO_ARCHIVE_PATH="/var/lib/dvd/archives"
+ISO_ARCHIVE_PATH=""
+
+# Remote NAS archive path (optional - for transfer to separate NAS)
+# If set, archives are transferred here after local compression
+# Leave empty if this machine is the final archive destination
 # Example: NAS_ARCHIVE_PATH="/volume1/Archives/dvd-isos"
 NAS_ARCHIVE_PATH=""
 

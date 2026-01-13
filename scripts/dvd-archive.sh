@@ -22,6 +22,7 @@ ISO_COMPRESSION_LEVEL="${ISO_COMPRESSION_LEVEL:-9}"
 ISO_COMPRESSION_THREADS="${ISO_COMPRESSION_THREADS:-0}"
 ENABLE_PAR2_RECOVERY="${ENABLE_PAR2_RECOVERY:-1}"
 PAR2_REDUNDANCY_PERCENT="${PAR2_REDUNDANCY_PERCENT:-5}"
+ISO_ARCHIVE_PATH="${ISO_ARCHIVE_PATH:-/var/lib/dvd/archives}"
 NAS_ARCHIVE_PATH="${NAS_ARCHIVE_PATH:-}"
 DELETE_ISO_AFTER_ARCHIVE="${DELETE_ISO_AFTER_ARCHIVE:-1}"
 DELETE_LOCAL_XZ_AFTER_ARCHIVE="${DELETE_LOCAL_XZ_AFTER_ARCHIVE:-1}"
@@ -38,16 +39,24 @@ archive_iso() {
 
     log_info "[ARCHIVE] Processing: $iso_path"
 
-    # Extract title and timestamp from filename
-    # Format: TITLE-TIMESTAMP.iso.deletable (the .deletable suffix indicates it's safe to delete)
+    # Handle both new marker files and legacy .iso.deletable files
     local filename=$(basename "$iso_path")
-    local basename="${filename%.iso.deletable}"
-    if [[ "$basename" == "$filename" ]]; then
-        # Fallback: try .iso suffix
+    local basename
+    local title
+    local timestamp
+
+    # Check if this is a legacy .iso.deletable file
+    if [[ "$filename" == *.iso.deletable ]]; then
+        basename="${filename%.iso.deletable}"
+        title="${basename%-*}"
+        timestamp="${basename##*-}"
+        log_info "[ARCHIVE] Legacy mode: processing .iso.deletable file"
+    else
+        # New mode: iso_path is the actual ISO, extract from filename
         basename="${filename%.iso}"
+        title="${basename%-*}"
+        timestamp="${basename##*-}"
     fi
-    local title="${basename%-*}"
-    local timestamp="${basename##*-}"
 
     log_info "[ARCHIVE] Title: '$title', Timestamp: '$timestamp'"
 
@@ -77,10 +86,19 @@ EOF
     state_file_archiving=$(create_pipeline_state "archiving" "$title" "$timestamp" "$archive_metadata")
 
     local compression_start=$(date +%s)
-    local xz_path="${iso_path}.xz"
+    local staging_xz_path="${iso_path}.xz"  # Initial compression in staging dir
+    local xz_basename=$(basename "${iso_path%.iso*}.iso.xz")  # e.g., TITLE-1234567890.iso.xz
+    local archive_xz_path="${ISO_ARCHIVE_PATH}/${xz_basename}"  # Final location
 
-    # Step 1: Compress ISO
-    log_info "[ARCHIVE] Step 1/4: Compressing ISO..."
+    # Ensure archive directory exists
+    if [[ ! -d "$ISO_ARCHIVE_PATH" ]]; then
+        log_info "[ARCHIVE] Creating archive directory: $ISO_ARCHIVE_PATH"
+        mkdir -p "$ISO_ARCHIVE_PATH"
+        chmod 2775 "$ISO_ARCHIVE_PATH" 2>/dev/null || true
+    fi
+
+    # Step 1: Compress ISO (in staging directory)
+    log_info "[ARCHIVE] Step 1/5: Compressing ISO..."
     if ! compress_iso "$iso_path"; then
         log_error "[ARCHIVE] Compression failed"
         remove_state_file "$state_file_archiving"
@@ -92,46 +110,67 @@ EOF
 
     # Step 2: Generate PAR2 recovery files (if enabled)
     if [[ "$ENABLE_PAR2_RECOVERY" == "1" ]]; then
-        log_info "[ARCHIVE] Step 2/4: Generating PAR2 recovery files..."
-        if ! generate_recovery_files "$xz_path"; then
+        log_info "[ARCHIVE] Step 2/5: Generating PAR2 recovery files..."
+        if ! generate_recovery_files "$staging_xz_path"; then
             log_warn "[ARCHIVE] PAR2 generation failed (continuing without recovery files)"
         fi
     else
-        log_info "[ARCHIVE] Step 2/4: PAR2 recovery disabled, skipping..."
+        log_info "[ARCHIVE] Step 2/5: PAR2 recovery disabled, skipping..."
     fi
 
     # Step 3: Verify compressed file integrity
-    log_info "[ARCHIVE] Step 3/4: Verifying compressed file integrity..."
-    if ! verify_compressed_iso "$xz_path"; then
+    log_info "[ARCHIVE] Step 3/5: Verifying compressed file integrity..."
+    if ! verify_compressed_iso "$staging_xz_path"; then
         log_error "[ARCHIVE] Integrity verification failed - compressed file may be corrupt"
         # Clean up corrupt archive
-        rm -f "$xz_path" "${xz_path}"*.par2
+        rm -f "$staging_xz_path" "${staging_xz_path}"*.par2
         remove_state_file "$state_file_archiving"
         return 1
     fi
 
-    # Step 4: Transfer to NAS (if configured)
+    # Step 4: Move to local archive path (ISO_ARCHIVE_PATH)
+    log_info "[ARCHIVE] Step 4/5: Moving to archive location..."
+    if ! mv "$staging_xz_path" "$archive_xz_path" 2>/dev/null; then
+        log_error "[ARCHIVE] Failed to move archive to: $archive_xz_path"
+        rm -f "$staging_xz_path" "${staging_xz_path}"*.par2
+        remove_state_file "$state_file_archiving"
+        return 1
+    fi
+    log_info "[ARCHIVE] Archive moved to: $archive_xz_path"
+
+    # Move PAR2 files to archive location too
+    local par2_files
+    par2_files=$(find "$(dirname "$staging_xz_path")" -maxdepth 1 -name "$(basename "$staging_xz_path")*.par2" 2>/dev/null || true)
+    if [[ -n "$par2_files" ]]; then
+        while IFS= read -r par2_file; do
+            [[ -z "$par2_file" ]] && continue
+            mv "$par2_file" "$ISO_ARCHIVE_PATH/" 2>/dev/null || log_warn "[ARCHIVE] Could not move PAR2 file: $par2_file"
+        done <<< "$par2_files"
+    fi
+
+    # Step 5: Transfer to remote NAS (if configured - separate from local archive)
     local nas_path=""
+    local xz_path="$archive_xz_path"  # Use the final archive location for metadata
     if [[ -n "$NAS_ARCHIVE_PATH" ]]; then
-        log_info "[ARCHIVE] Step 4/4: Transferring archive to NAS..."
-        if transfer_archive_to_nas "$xz_path"; then
-            nas_path="${NAS_ARCHIVE_PATH}/$(basename "$xz_path")"
+        log_info "[ARCHIVE] Step 5/5: Transferring archive to remote NAS..."
+        if transfer_archive_to_nas "$archive_xz_path"; then
+            nas_path="${NAS_ARCHIVE_PATH}/$(basename "$archive_xz_path")"
             log_info "[ARCHIVE] Archive transferred to: $nas_path"
 
-            # Clean up local .xz and par2 files if configured
+            # Clean up local archive if configured (since remote has it)
             if [[ "$DELETE_LOCAL_XZ_AFTER_ARCHIVE" == "1" ]]; then
-                log_info "[ARCHIVE] Removing local archive files..."
-                rm -f "$xz_path"
-                rm -f "${xz_path}"*.par2
+                log_info "[ARCHIVE] Removing local archive files (remote copy exists)..."
+                rm -f "$archive_xz_path"
+                rm -f "${archive_xz_path}"*.par2
             fi
         else
-            log_error "[ARCHIVE] Transfer to NAS failed"
+            log_error "[ARCHIVE] Transfer to remote NAS failed"
             # Keep local files for retry
-            nas_path="(transfer failed - local files retained)"
+            nas_path="(transfer failed - local files retained at $archive_xz_path)"
         fi
     else
-        log_info "[ARCHIVE] Step 4/4: No NAS_ARCHIVE_PATH configured, keeping local archive"
-        nas_path="local:$xz_path"
+        log_info "[ARCHIVE] Step 5/5: No remote NAS configured, archive stored locally"
+        nas_path="local:$archive_xz_path"
     fi
 
     # Create .archived state file with complete metadata
@@ -141,12 +180,25 @@ EOF
     remove_state_file "$state_file_archiving"
     create_pipeline_state "archived" "$title" "$timestamp" "$archived_metadata" > /dev/null
 
-    # Delete original ISO if configured and transfer was successful
-    if [[ "$DELETE_ISO_AFTER_ARCHIVE" == "1" ]] && [[ "$nas_path" != "(transfer failed - local files retained)" ]]; then
+    # Delete original ISO if configured and archive was successful (local or remote)
+    # Only delete if we have a valid archive location (not a transfer failure)
+    local archive_successful=false
+    if [[ "$nas_path" == "local:"* ]] || [[ "$nas_path" == "${NAS_ARCHIVE_PATH}/"* ]]; then
+        archive_successful=true
+    fi
+
+    if [[ "$DELETE_ISO_AFTER_ARCHIVE" == "1" ]] && [[ "$archive_successful" == "true" ]]; then
         log_info "[ARCHIVE] Removing original ISO: $iso_path"
         rm -f "$iso_path"
 
-        # Also remove the .deletable marker
+        # Remove .archive-ready marker (new approach)
+        local archive_marker="${iso_path}.archive-ready"
+        if [[ -f "$archive_marker" ]]; then
+            log_debug "[ARCHIVE] Removing archive marker: $archive_marker"
+            rm -f "$archive_marker"
+        fi
+
+        # Legacy: remove .deletable marker if exists
         if [[ -f "${iso_path}.deletable" ]]; then
             rm -f "${iso_path}.deletable"
         fi
@@ -160,6 +212,8 @@ EOF
         if [[ -d "${iso_path}.keys" ]]; then
             rm -rf "${iso_path}.keys"
         fi
+    elif [[ "$archive_successful" != "true" ]]; then
+        log_warn "[ARCHIVE] ISO not deleted - archive transfer failed, will retry later"
     fi
 
     log_info "[ARCHIVE] Archive complete: $title"
@@ -263,10 +317,11 @@ main() {
     log_info "[ARCHIVE] Compression level: $ISO_COMPRESSION_LEVEL"
     log_info "[ARCHIVE] Threads: $ISO_COMPRESSION_THREADS (0=auto)"
     log_info "[ARCHIVE] PAR2 recovery: $ENABLE_PAR2_RECOVERY"
+    log_info "[ARCHIVE] Local archive path: $ISO_ARCHIVE_PATH"
     if [[ -n "$NAS_ARCHIVE_PATH" ]]; then
-        log_info "[ARCHIVE] NAS archive path: $NAS_ARCHIVE_PATH"
+        log_info "[ARCHIVE] Remote NAS archive path: $NAS_ARCHIVE_PATH"
     else
-        log_info "[ARCHIVE] NAS archive path: (not configured - local only)"
+        log_info "[ARCHIVE] Remote NAS archive path: (not configured - local only)"
     fi
 
     # Acquire lock (only one archive process at a time due to high CPU usage)

@@ -1527,6 +1527,7 @@ ISO_COMPRESSION_LEVEL="${ISO_COMPRESSION_LEVEL:-9}"
 ISO_COMPRESSION_THREADS="${ISO_COMPRESSION_THREADS:-0}"
 ENABLE_PAR2_RECOVERY="${ENABLE_PAR2_RECOVERY:-1}"
 PAR2_REDUNDANCY_PERCENT="${PAR2_REDUNDANCY_PERCENT:-5}"
+ISO_ARCHIVE_PATH="${ISO_ARCHIVE_PATH:-/var/lib/dvd/archives}"
 NAS_ARCHIVE_PATH="${NAS_ARCHIVE_PATH:-}"
 DELETE_ISO_AFTER_ARCHIVE="${DELETE_ISO_AFTER_ARCHIVE:-1}"
 DELETE_LOCAL_XZ_AFTER_ARCHIVE="${DELETE_LOCAL_XZ_AFTER_ARCHIVE:-1}"
@@ -1653,34 +1654,59 @@ generate_recovery_files() {
 }
 
 # Find ISOs that are ready for archiving
-# Archivable ISOs are renamed to .iso.deletable (the file IS the ISO)
+# Looks for .archive-ready marker files created by the encoder
 # Usage: find_archivable_isos
-# Returns: list of ISO paths (one per line) - returns the .deletable file path
+# Returns: list of ISO paths (one per line)
 find_archivable_isos() {
     local staging_dir="${STAGING_DIR:-/var/tmp/dvd-rips}"
 
-    # Find .iso.deletable files (the ISO was renamed to include .deletable suffix)
-    find "$staging_dir" -maxdepth 1 -name "*.iso.deletable" -type f 2>/dev/null | while read -r deletable_file; do
-        # The deletable file IS the ISO - extract title-timestamp from filename
-        # Format: TITLE-TIMESTAMP.iso.deletable
-        local basename=$(basename "$deletable_file")
-        local title_timestamp="${basename%.iso.deletable}"
+    # Find .archive-ready marker files
+    find "$staging_dir" -maxdepth 1 -name "*.archive-ready" -type f 2>/dev/null | while read -r marker_file; do
+        # Read ISO path from marker file metadata
+        local iso_path=$(parse_json_field "$(cat "$marker_file" 2>/dev/null)" "iso_path")
+
+        # Verify ISO still exists
+        if [[ -z "$iso_path" ]] || [[ ! -f "$iso_path" ]]; then
+            log_warn "ISO missing for marker: $marker_file"
+            continue
+        fi
+
+        # Extract title-timestamp from ISO filename
+        local basename=$(basename "$iso_path")
+        local title_timestamp="${basename%.iso}"
 
         # Check if already archived (skip if .archived state exists)
         local archived_state="${staging_dir}/${title_timestamp}.archived"
         if [[ -f "$archived_state" ]]; then
-            log_debug "Already archived, skipping: $deletable_file"
+            log_debug "Already archived, skipping: $iso_path"
             continue
         fi
 
         # Check if currently archiving (skip if .archiving state exists)
         local archiving_state="${staging_dir}/${title_timestamp}.archiving"
         if [[ -f "$archiving_state" ]]; then
-            log_debug "Currently archiving, skipping: $deletable_file"
+            log_debug "Currently archiving, skipping: $iso_path"
             continue
         fi
 
-        # Return the deletable file path (it IS the ISO)
+        # Return the ISO path
+        echo "$iso_path"
+    done
+
+    # Legacy support: also check for .iso.deletable files (migration path)
+    find "$staging_dir" -maxdepth 1 -name "*.iso.deletable" -type f 2>/dev/null | while read -r deletable_file; do
+        local basename=$(basename "$deletable_file")
+        local title_timestamp="${basename%.iso.deletable}"
+
+        # Skip if already archived or archiving
+        if [[ -f "${staging_dir}/${title_timestamp}.archived" ]]; then
+            continue
+        fi
+        if [[ -f "${staging_dir}/${title_timestamp}.archiving" ]]; then
+            continue
+        fi
+
+        # Return the deletable file path (legacy - it IS the ISO)
         echo "$deletable_file"
     done
 }
