@@ -10,6 +10,9 @@ from datetime import datetime
 from math import ceil
 from flask import Blueprint, jsonify, render_template, request
 
+# Hostname for page titles
+HOSTNAME = socket.gethostname().split('.')[0]
+
 from helpers.pipeline import STAGING_DIR, STATE_ORDER
 from helpers.cluster import call_peer_api
 
@@ -499,7 +502,8 @@ def archives_page():
         archived_stats=archived_stats,
         format_size=format_size,
         archive_page=page,
-        archive_total_pages=total_pages
+        archive_total_pages=total_pages,
+        hostname=HOSTNAME
     )
 
 
