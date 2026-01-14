@@ -297,20 +297,27 @@ PREVIEW_RESOLUTION="640:360"
 # ============================================================================
 # ISO Archival Configuration
 # ============================================================================
-# Long-term archival of ISOs using lossless compression. After encoding
-# completes, the ISO can be compressed for storage, allowing recreation of
-# MKVs if needed. Archives are transferred to NAS for long-term storage.
+# Long-term archival of ISOs to NAS. After encoding completes, ISOs are
+# transferred to NAS_ARCHIVE_PATH for preservation, allowing recreation of
+# MKVs if needed (e.g., with different encoding settings).
 #
-# Archive pipeline:
-#   ISO.deletable → xz compress → par2 recovery → transfer to NAS → delete local
+# Two archival modes:
+#   Raw ISO transfer (default): ISO → transfer to NAS → delete local
+#   Compressed archival:        ISO → xz compress → par2 recovery → transfer → delete
 #
-# Uses xz (LZMA2) compression with CRC64 integrity checks and optional
+# Compression uses xz (LZMA2) with CRC64 integrity checks and optional
 # par2 recovery files for bit rot protection.
 
-# Enable ISO archival compression (0=disabled, 1=enabled)
-# When enabled, ISOs marked .deletable are compressed and archived to NAS
-# Default: disabled - enable only if you want to preserve ISOs long-term
-ENABLE_ISO_ARCHIVAL="0"
+# Enable ISO archival (0=disabled, 1=enabled)
+# When enabled, ISOs are transferred to NAS_ARCHIVE_PATH after encoding
+# Default: enabled - preserves original ISOs on NAS for future re-encoding
+ENABLE_ISO_ARCHIVAL="1"
+
+# Enable compression before archival (0=transfer raw ISO, 1=compress to .xz)
+# When disabled: ISOs are transferred directly to NAS (faster, uses more space)
+# When enabled: ISOs are compressed with xz before transfer (slower, saves space)
+# Default: disabled - raw ISO transfer for faster archival and re-encoding capability
+ENABLE_ISO_COMPRESS_FOR_ARCHIVAL="0"
 
 # Compression level (1-9, 9=best compression, slowest)
 # Level 9 with extreme mode provides best ratio for DVD ISOs

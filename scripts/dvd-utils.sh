@@ -1522,7 +1522,8 @@ EOF
 # ============================================================================
 
 # Default archival configuration
-ENABLE_ISO_ARCHIVAL="${ENABLE_ISO_ARCHIVAL:-0}"
+ENABLE_ISO_ARCHIVAL="${ENABLE_ISO_ARCHIVAL:-1}"
+ENABLE_ISO_COMPRESS_FOR_ARCHIVAL="${ENABLE_ISO_COMPRESS_FOR_ARCHIVAL:-0}"
 ISO_COMPRESSION_LEVEL="${ISO_COMPRESSION_LEVEL:-9}"
 ISO_COMPRESSION_THREADS="${ISO_COMPRESSION_THREADS:-0}"
 ENABLE_PAR2_RECOVERY="${ENABLE_PAR2_RECOVERY:-1}"
@@ -1780,6 +1781,79 @@ transfer_archive_to_nas() {
         fi
     else
         log_error "Archive transfer to NAS failed"
+        return 1
+    fi
+}
+
+# Transfer raw ISO file to NAS (no compression)
+# Usage: transfer_iso_to_nas ISO_PATH
+# Returns: 0 on success, 1 on failure
+transfer_iso_to_nas() {
+    local iso_path="$1"
+    local archive_path="${NAS_ARCHIVE_PATH:-}"
+
+    if [[ -z "$archive_path" ]]; then
+        log_error "NAS_ARCHIVE_PATH not configured"
+        return 1
+    fi
+
+    if [[ -z "$NAS_HOST" ]] || [[ -z "$NAS_USER" ]]; then
+        log_error "NAS configuration incomplete (NAS_HOST or NAS_USER missing)"
+        return 1
+    fi
+
+    if [[ ! -f "$iso_path" ]]; then
+        log_error "ISO file not found: $iso_path"
+        return 1
+    fi
+
+    local iso_basename=$(basename "$iso_path")
+    local iso_size_bytes=$(stat -c%s "$iso_path" 2>/dev/null || stat -f%z "$iso_path" 2>/dev/null)
+    local iso_size_gb=$(echo "scale=2; $iso_size_bytes / 1073741824" | bc)
+
+    log_info "Transferring ISO to NAS: $iso_basename (${iso_size_gb}GB) -> ${NAS_HOST}:${archive_path}"
+
+    # Build SSH options with identity file if configured
+    local ssh_opts=""
+    if [[ -n "${NAS_SSH_IDENTITY:-}" ]] && [[ -f "$NAS_SSH_IDENTITY" ]]; then
+        ssh_opts="-i $NAS_SSH_IDENTITY"
+    fi
+
+    local remote_dest="${NAS_USER}@${NAS_HOST}:${archive_path}/"
+
+    # Transfer using rsync with progress
+    local rsync_result
+    if [[ -n "$ssh_opts" ]]; then
+        rsync -avz --progress -e "ssh $ssh_opts" "$iso_path" "$remote_dest" >> "$(get_stage_log_file)" 2>&1
+        rsync_result=$?
+    else
+        rsync -avz --progress "$iso_path" "$remote_dest" >> "$(get_stage_log_file)" 2>&1
+        rsync_result=$?
+    fi
+
+    if [[ $rsync_result -eq 0 ]]; then
+        log_info "ISO transfer to NAS successful"
+
+        # Verify remote file exists and size matches
+        local remote_size
+        if [[ -n "$ssh_opts" ]]; then
+            remote_size=$(ssh $ssh_opts "${NAS_USER}@${NAS_HOST}" "stat -c%s \"${archive_path}/${iso_basename}\" 2>/dev/null")
+        else
+            remote_size=$(ssh "${NAS_USER}@${NAS_HOST}" "stat -c%s \"${archive_path}/${iso_basename}\" 2>/dev/null")
+        fi
+
+        if [[ "$remote_size" == "$iso_size_bytes" ]]; then
+            log_info "Remote ISO verification passed (${iso_size_gb}GB)"
+            return 0
+        elif [[ -n "$remote_size" ]]; then
+            log_warn "Remote ISO size mismatch: local=$iso_size_bytes, remote=$remote_size"
+            return 0  # Still consider success if file exists
+        else
+            log_error "Remote ISO not found after transfer: ${archive_path}/${iso_basename}"
+            return 1
+        fi
+    else
+        log_error "ISO transfer to NAS failed"
         return 1
     fi
 }

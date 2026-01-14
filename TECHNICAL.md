@@ -4,21 +4,27 @@ This document covers the internal architecture, file formats, and system integra
 
 ## Pipeline Architecture
 
-The system uses a 3-stage decoupled pipeline that separates disc handling from encoding and transfer:
+The system uses a 4-stage decoupled pipeline that separates disc handling from encoding, transfer, and archival:
 
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   Stage 1: ISO  │     │ Stage 2: Encode │     │ Stage 3: NAS    │
-│   (udev trigger)│────▶│ (15 min timer)  │────▶│ (15 min timer)  │
-│                 │     │                 │     │                 │
-│ dvd-iso.sh      │     │ dvd-encoder.sh  │     │ dvd-transfer.sh │
-│ - ddrescue ISO  │     │ - HandBrake     │     │ - rsync to NAS  │
-│ - Eject disc    │     │ - Preview gen   │     │ - Cleanup local │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-        │                       │                       │
-        ▼                       ▼                       ▼
-  *.iso-ready             *.encoded-ready          *.transferred
-  (state file)            (state file)             (state file)
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   Stage 1: ISO  │     │ Stage 2: Encode │     │ Stage 3: NAS    │     │ Stage 4: Archive│
+│   (udev trigger)│────▶│ (15 min timer)  │────▶│ (15 min timer)  │────▶│ (30 min timer)  │
+│                 │     │                 │     │                 │     │                 │
+│ dvd-iso.sh      │     │ dvd-encoder.sh  │     │ dvd-transfer.sh │     │ dvd-archive.sh  │
+│ - ddrescue ISO  │     │ - HandBrake     │     │ - rsync to NAS  │     │ - xz compress   │
+│ - Eject disc    │     │ - Preview gen   │     │ - Cleanup local │     │ - par2 parity   │
+└─────────────────┘     └─────────────────┘     └─────────────────┘     └─────────────────┘
+        │                       │                       │                       │
+        ▼                       ▼                       ▼                       ▼
+  *.iso-ready             *.encoded-ready          *.transferred           archived to
+  (state file)            (state file)             (state file)         /var/lib/dvd/archives/
+
+Optional: Cluster Distribution (Stage 2a)
+┌─────────────────┐
+│ dvd-distribute  │  Offloads encoding to peer nodes when local load is high
+│ (15 min timer)  │  Uses rsync to send ISO, receives MKV via callback
+└─────────────────┘
 ```
 
 ### Why Decoupled?
@@ -39,7 +45,10 @@ The system uses a 3-stage decoupled pipeline that separates disc handling from e
 |--------|---------|---------|
 | `dvd-iso.sh` | udev (disc insert) | Create ISO with ddrescue, eject disc |
 | `dvd-encoder.sh` | systemd timer (15 min) | Encode ONE ISO to MKV with HandBrake |
+| `dvd-distribute.sh` | systemd timer (15 min) | Distribute encoding jobs to cluster peers |
 | `dvd-transfer.sh` | systemd timer (15 min) | Transfer ONE MKV to NAS |
+| `dvd-archive.sh` | systemd timer (30 min) | Compress ISOs for long-term storage |
+| `dvd-audit.sh` | systemd timer (hourly) | Detect suspicious/corrupted MKV files |
 | `dvd-ripper.sh` | manual | Legacy monolithic mode (all stages in one process) |
 | `dvd-utils.sh` | sourced | Shared library (~40 functions) |
 
@@ -65,9 +74,15 @@ iso-creating → iso-ready → encoding → encoded-ready → transferring → t
      │              │           │            │              │             └─ On NAS, kept for rename
      │              │           │            │              └─ rsync in progress
      │              │           │            └─ Ready for NAS transfer
-     │              │           └─ HandBrake encoding
+     │              │           └─ HandBrake encoding (local)
      │              └─ Ready for encoder pickup
      └─ ddrescue creating ISO
+
+Cluster mode (optional):
+iso-ready → distributing → distributed-to-{peer} → encoded-ready
+                │                    │
+                │                    └─ Peer encoding, awaiting callback
+                └─ Sending ISO to peer via rsync
 ```
 
 ### State File Format
@@ -108,7 +123,9 @@ Prevent concurrent operations within each stage:
 |-----------|-------|---------|
 | `/run/dvd-ripper/iso.lock` | 1 | Only one ISO creation at a time |
 | `/run/dvd-ripper/encoder.lock` | 2 | Only one encode at a time |
+| `/run/dvd-ripper/distribute.lock` | 2a | Only one distribution at a time |
 | `/run/dvd-ripper/transfer.lock` | 3 | Only one transfer at a time |
+| `/run/dvd-ripper/archive.lock` | 4 | Only one archive operation at a time |
 
 Lock files contain the PID of the holding process. Stale locks (process dead) are automatically detected and cleaned up.
 
@@ -119,16 +136,23 @@ Lock files contain the PID of the holding process. Stale locks (process dead) ar
 | Timer | Interval | Starts At | Purpose |
 |-------|----------|-----------|---------|
 | `dvd-encoder.timer` | 15 min | 5 min after boot | Trigger encoder service |
+| `dvd-distribute.timer` | 15 min | 3 min after boot | Distribute jobs to cluster peers |
 | `dvd-transfer.timer` | 15 min | 7 min after boot | Trigger transfer service |
+| `dvd-archive.timer` | 30 min | 20 min after boot | Compress ISOs for archival |
+| `dvd-audit.timer` | hourly | 10 min after boot | Detect suspicious MKV files |
 
-Timers use `RandomizedDelaySec=30s` to avoid thundering herd.
+Timers use `RandomizedDelaySec` (30s-5min) to avoid thundering herd.
 
 ### Services
 
 | Service | Type | Description |
 |---------|------|-------------|
+| `dvd-iso@.service` | template | Runs dvd-iso.sh for a specific device |
 | `dvd-encoder.service` | oneshot | Runs dvd-encoder.sh once |
+| `dvd-distribute.service` | oneshot | Runs dvd-distribute.sh once (cluster mode) |
 | `dvd-transfer.service` | oneshot | Runs dvd-transfer.sh once |
+| `dvd-archive.service` | oneshot | Runs dvd-archive.sh once |
+| `dvd-audit.service` | oneshot | Runs dvd-audit.sh once |
 | `dvd-dashboard.service` | simple | Flask web dashboard (auto-restart) |
 | `dvd-ripper@.service` | template | Legacy service for monolithic mode |
 
@@ -223,8 +247,20 @@ Config file: `/etc/dvd-ripper.conf`
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `CLEANUP_MKV_AFTER_TRANSFER` | `1` | Delete local MKV after NAS transfer |
-| `CLEANUP_ISO_AFTER_TRANSFER` | `1` | Delete ISO after transfer |
+| `CLEANUP_ISO_AFTER_TRANSFER` | `1` | Delete ISO after transfer (when archival disabled) |
 | `CLEANUP_PREVIEW_AFTER_TRANSFER` | `0` | Keep previews for identification |
+
+### ISO Archival
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `ENABLE_ISO_ARCHIVAL` | `1` | Enable ISO archival to NAS |
+| `ENABLE_ISO_COMPRESS_FOR_ARCHIVAL` | `0` | Compress ISOs before transfer (0=raw, 1=xz) |
+| `NAS_ARCHIVE_PATH` | - | NAS path for ISO archives |
+| `ISO_ARCHIVE_PATH` | `/var/lib/dvd/archives` | Local archive path (when compression enabled) |
+| `ISO_COMPRESSION_LEVEL` | `9` | xz compression level (1-9) |
+| `DELETE_ISO_AFTER_ARCHIVE` | `1` | Delete local ISO after successful archive |
+| `DELETE_LOCAL_XZ_AFTER_ARCHIVE` | `1` | Delete local .xz after NAS transfer |
 
 ### Retry/Recovery
 
@@ -303,16 +339,27 @@ sudo dpkg-reconfigure libdvd-pkg
 ├── *.iso-creating          # ISO creation in progress
 ├── *.iso-ready             # Ready for encoding
 ├── *.encoding              # Encoding in progress
+├── *.distributing          # Being sent to cluster peer
+├── *.distributed-to-{peer} # Sent to peer, awaiting result
 ├── *.encoded-ready         # Ready for transfer
 ├── *.transferring          # Transfer in progress
 ├── *.transferred           # Complete (kept for rename)
 ├── *.iso                   # ISO image files
 ├── *.iso.mapfile           # ddrescue progress maps
 ├── *.iso.deletable         # ISOs marked for cleanup
+├── *.iso.keys/             # libdvdcss key cache directories
 ├── *.mkv                   # Encoded video files
 └── *.preview.mp4           # Preview clips
 
-/var/log/dvd-ripper.log     # Application log
+/var/log/dvd-ripper/        # Log directory (per-stage logs)
+├── iso.log                 # Stage 1: ISO creation logs
+├── encoder.log             # Stage 2: Encoding logs
+├── distribute.log          # Stage 2a: Cluster distribution logs
+├── transfer.log            # Stage 3: Transfer logs
+├── archive.log             # Stage 4: Archival logs
+└── audit.log               # Audit/integrity check logs
+
+/var/lib/dvd/archives/      # Compressed ISO archive storage
 /run/dvd-ripper/*.lock      # Stage lock files
 /etc/dvd-ripper.conf        # Configuration
 /usr/local/bin/dvd-*.sh     # Installed scripts
