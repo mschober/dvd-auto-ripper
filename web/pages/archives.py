@@ -1248,16 +1248,11 @@ def archives_page():
     # Get receiving transfers (rsync in progress)
     receiving = get_receiving_transfers()
 
-    # Get version info (try to import from main dashboard)
-    try:
-        from dvd_dashboard import get_pipeline_version, DASHBOARD_VERSION, GITHUB_URL
-        pipeline_version = get_pipeline_version()
-        dashboard_version = DASHBOARD_VERSION
-        github_url = GITHUB_URL
-    except ImportError:
-        pipeline_version = "?.?.?"
-        dashboard_version = "?.?.?"
-        github_url = "https://github.com/mschober/dvd-auto-ripper"
+    # Get version info from dashboard module
+    from pages.dashboard import get_pipeline_version, DASHBOARD_VERSION, GITHUB_URL
+    pipeline_version = get_pipeline_version()
+    dashboard_version = DASHBOARD_VERSION
+    github_url = GITHUB_URL
 
     return render_template_string(
         ARCHIVES_HTML,
