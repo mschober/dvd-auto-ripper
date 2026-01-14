@@ -7,6 +7,7 @@ import socket
 import subprocess
 import time
 from datetime import datetime
+from math import ceil
 from flask import Blueprint, jsonify, render_template, request
 
 from helpers.pipeline import STAGING_DIR, STATE_ORDER
@@ -14,6 +15,9 @@ from helpers.cluster import call_peer_api
 
 # Blueprint setup
 archives_bp = Blueprint('archives', __name__)
+
+# Pagination
+ARCHIVES_PER_PAGE = 25
 
 # ============================================================================
 # Helper Functions
@@ -439,6 +443,7 @@ def ping_peer_simple(host, port):
 @archives_bp.route("/archives")
 def archives_page():
     """Archives management page."""
+    page = request.args.get("page", 1, type=int)
     config = get_cluster_config_for_archives()
     archives = get_iso_archives()
 
@@ -467,24 +472,34 @@ def archives_page():
                 "disk": peer_disk
             })
 
-    # Calculate totals
+    # Calculate totals (before pagination)
     total_size = sum(a["iso_size"] for a in archives)
+    total_count = len(archives)
+
+    # Pagination
+    total_pages = ceil(total_count / ARCHIVES_PER_PAGE) if total_count > 0 else 1
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * ARCHIVES_PER_PAGE
+    end = start + ARCHIVES_PER_PAGE
+    paginated_archives = archives[start:end]
 
     # Get receiving transfers (rsync in progress)
     receiving = get_receiving_transfers()
 
     return render_template(
         "archives.html",
-        archives=archives,
+        archives=paginated_archives,
         receiving=receiving,
-        total_count=len(archives),
+        total_count=total_count,
         total_size_gb=round(total_size / (1024**3), 2),
         disk_usage=disk_usage,
         cluster_enabled=config["cluster_enabled"],
         node_name=config["node_name"],
         peers=peers,
         archived_stats=archived_stats,
-        format_size=format_size
+        format_size=format_size,
+        archive_page=page,
+        archive_total_pages=total_pages
     )
 
 
