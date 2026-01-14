@@ -916,13 +916,19 @@ create_directories() {
     print_info "✓ Archive directory: $archive_dir (mode 2775, owner dvd-transfer)"
 
     # Create libdvdcss cache directory (service users have no home dirs)
+    # SGID (2775) ensures new subdirectories inherit dvd-ripper group
     local dvdcss_cache="/var/cache/dvdcss"
     if [[ ! -d "$dvdcss_cache" ]]; then
         mkdir -p "$dvdcss_cache"
     fi
-    chmod 775 "$dvdcss_cache"
+    chmod 2775 "$dvdcss_cache"
     chown root:dvd-ripper "$dvdcss_cache"
-    print_info "✓ DVD CSS cache: $dvdcss_cache (mode 775, group dvd-ripper)"
+    # Fix permissions on existing subdirectories (may have been created by root)
+    if [[ -d "$dvdcss_cache" ]]; then
+        find "$dvdcss_cache" -mindepth 1 -type d ! -group dvd-ripper -exec chown :dvd-ripper {} \; 2>/dev/null || true
+        find "$dvdcss_cache" -mindepth 1 -type d ! -perm -g+w -exec chmod g+w {} \; 2>/dev/null || true
+    fi
+    print_info "✓ DVD CSS cache: $dvdcss_cache (mode 2775, group dvd-ripper)"
 
     print_info "✓ Directories ready"
 }
