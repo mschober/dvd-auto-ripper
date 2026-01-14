@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+
+{% block title %}Archives{% endblock %}
+
+{% block header %}<a href="/">Dashboard</a> / Archives{% endblock %}
+
+{% block content %}
+<p class="subtitle">ISO archive management{% if cluster_enabled %} with cluster transfer{% endif %}</p>
+
+<div class="summary">
+    <div class="summary-stat">
+        <div class="summary-value">{{ total_count }}</div>
+        <div class="summary-label">ISO Archives</div>
+    </div>
+    <div class="summary-stat">
+        <div class="summary-value">{{ total_size_gb }} GB</div>
+        <div class="summary-label">Total Size</div>
+    </div>
+    {% if archived_stats.total_archived > 0 %}
+    <div class="summary-stat">
+        <div class="summary-value">{{ archived_stats.total_archived }}</div>
+        <div class="summary-label">Compressed Archives</div>
+    </div>
+    <div class="summary-stat">
+        <div class="summary-value">{{ "%.1f"|format(archived_stats.space_saved_bytes / 1024 / 1024 / 1024) }} GB</div>
+        <div class="summary-label">Space Saved ({{ "%.0f"|format((1 - archived_stats.average_ratio) * 100) }}%)</div>
+    </div>
+    {% endif %}
+    <div class="summary-stat">
+        <div class="summary-value">{{ disk_usage.available }}</div>
+        <div class="summary-label">Available ({{ disk_usage.percent }}% used)</div>
+        <div class="disk-bar" style="margin-top: 8px;">
+            <div class="disk-bar-fill {{ 'danger' if disk_usage.percent_num > 90 else 'warning' if disk_usage.percent_num > 75 else '' }}"
+                 style="width: {{ disk_usage.percent_num }}%;"></div>
+        </div>
+    </div>
+</div>
+
+<div class="layout">
+    <div class="main-content">
+        <div class="card">
+            <h2>ISO Archives on {{ node_name or 'this node' }}</h2>
+
+            {% if receiving %}
+            <div class="receiving-section">
+                <h3 class="receiving-header">Receiving Transfers</h3>
+                {% for recv in receiving %}
+                <div class="receiving-item">
+                    <div class="receiving-title">{{ recv.title }}</div>
+                    <div class="receiving-info">
+                        <span class="receiving-size">{{ format_size(recv.current_size) }}</span>
+                        <span class="receiving-status">receiving...</span>
+                    </div>
+                    <div class="progress-bar-mini pulsing">
+                        <div class="progress-bar-fill" style="width: 100%;"></div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if archives %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Title</th>
+                        <th>Size</th>
+                        <th>State</th>
+                        <th>Archive</th>
+                        <th>Files</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for archive in archives %}
+                    <tr class="archive-row {{ 'archived-row' if archive.archive_only else '' }}"
+                        data-prefix="{{ archive.prefix }}"
+                        data-archive-only="{{ 'true' if archive.archive_only else 'false' }}"
+                        {% if cluster_enabled %}draggable="true"{% endif %}
+                        ondragstart="handleDragStart(event)"
+                        ondragend="handleDragEnd(event)">
+                        <td class="title-cell">
+                            {{ archive.prefix.rsplit('-', 1)[0] | replace('_', ' ') }}
+                            <small>{{ archive.prefix }}{% if archive.archive_only %} (.xz){% endif %}</small>
+                        </td>
+                        <td class="size-cell" {% if archive.archive_only %}title="Original: {{ format_size(archive.iso_size) }}"{% endif %}>
+                            {% if archive.archive_only %}
+                            {{ format_size(archive.compressed_size) }}
+                            {% else %}
+                            {{ format_size(archive.iso_size) }}
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if archive.state == 'archive-transferring' or archive.state == 'xz-transferring' %}
+                            <div class="transfer-progress"
+                                 data-prefix="{{ archive.prefix }}"
+                                 data-peer="{{ archive.transfer_peer }}"
+                                 data-peer-host="{{ archive.metadata.peer_host if archive.metadata else (archive.transfer_metadata.peer_host if archive.transfer_metadata else '') }}"
+                                 data-peer-port="{{ archive.metadata.peer_port if archive.metadata else (archive.transfer_metadata.peer_port if archive.transfer_metadata else '') }}"
+                                 data-iso-size="{{ archive.compressed_size if archive.archive_only else archive.iso_size }}">
+                                <span class="badge badge-transferring">-&gt; {{ archive.transfer_peer }}</span>
+                                <span class="transfer-percent"></span>
+                                <div class="progress-bar-mini">
+                                    <div class="progress-bar-fill" style="width: 0%;"></div>
+                                </div>
+                            </div>
+                            {% elif archive.archive_only %}
+                            <span class="badge badge-archived">archived</span>
+                            {% elif archive.state %}
+                            <span class="badge badge-state">{{ archive.state }}</span>
+                            {% elif archive.archive_ready %}
+                            <span class="badge badge-deletable">archive-ready</span>
+                            {% elif archive.deletable %}
+                            <span class="badge badge-deletable">deletable</span>
+                            {% else %}
+                            <span class="badge badge-none">-</span>
+                            {% endif %}
+                        </td>
+                        <td class="archive-cell">
+                            {% if archive.archiving %}
+                            <span class="badge badge-archiving">compressing...</span>
+                            {% elif archive.archived %}
+                            <div class="archive-info">
+                                <span class="badge badge-archived">{{ format_size(archive.compressed_size) }}</span>
+                                <small class="compression-ratio">{{ "%.0f"|format((1 - archive.compressed_size / archive.iso_size) * 100) if archive.iso_size > 0 else 0 }}% saved</small>
+                            </div>
+                            {% elif (archive.archive_ready or archive.deletable) and archive.state not in ['encoding', 'transferring', 'distributing'] %}
+                            <button class="btn btn-archive" onclick="archiveNow('{{ archive.prefix }}')">
+                                Archive Now
+                            </button>
+                            {% else %}
+                            <span class="badge badge-none">-</span>
+                            {% endif %}
+                        </td>
+                        <td class="files-cell">
+                            {% if archive.archive_only %}
+                            <span class="file-present" title="{{ archive.archive_path }}">XZ</span>
+                            {% else %}
+                            <span class="{{ 'file-present' if archive.mapfile else 'file-missing' }}"
+                                  title="Recovery mapfile">MAP</span>
+                            <span class="{{ 'file-present' if archive.keys_dir else 'file-missing' }}"
+                                  title="CSS decryption keys">KEYS{% if archive.keys_count %}({{ archive.keys_count }}){% endif %}</span>
+                            {% endif %}
+                        </td>
+                        <td class="actions-cell">
+                            <button class="btn btn-delete"
+                                    onclick="deleteArchive('{{ archive.prefix }}')"
+                                    {% if archive.state in ['iso-creating', 'encoding', 'transferring', 'distributing', 'archive-transferring', 'xz-transferring'] %}
+                                    disabled title="Cannot delete: {{ archive.state }}"
+                                    {% endif %}>
+                                Delete
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-state">
+                <h3>No ISO Archives</h3>
+                <p>ISO files will appear here when DVDs are ripped.</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if cluster_enabled and peers %}
+    <div class="sidebar">
+        <div class="card peer-panel">
+            <h2>Transfer to Peer</h2>
+            <p style="font-size: 12px; color: #6b7280; margin-bottom: 16px;">
+                Drag an archive row and drop on a peer to transfer
+            </p>
+            {% for peer in peers %}
+            <div class="drop-zone {{ 'online' if peer.online else 'offline' }}"
+                 data-peer="{{ peer.name }}:{{ peer.host }}:{{ peer.port }}"
+                 ondragover="handleDragOver(event)"
+                 ondrop="handleDrop(event)"
+                 ondragleave="handleDragLeave(event)">
+                <div class="peer-name">
+                    <span class="status-dot status-{{ 'online' if peer.online else 'offline' }}"></span>
+                    {{ peer.name }}
+                </div>
+                <div class="peer-status">
+                    {% if peer.online %}
+                    {{ peer.host }}:{{ peer.port }}
+                    {% else %}
+                    Offline
+                    {% endif %}
+                </div>
+                {% if peer.disk %}
+                <div class="disk-usage">
+                    <div class="disk-bar">
+                        <div class="disk-bar-fill {{ 'danger' if peer.disk.percent_num > 90 else 'warning' if peer.disk.percent_num > 75 else '' }}"
+                             style="width: {{ peer.disk.percent_num }}%;"></div>
+                    </div>
+                    <div class="disk-text">{{ peer.disk.available }} free of {{ peer.disk.total }}</div>
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal-overlay" id="deleteModal">
+    <div class="modal">
+        <h3>Delete Archive?</h3>
+        <p id="deleteModalText">Are you sure you want to delete this archive and all associated files? This cannot be undone.</p>
+        <div class="modal-buttons">
+            <button class="modal-btn modal-btn-cancel" id="deleteModalNo" autofocus>No, Keep It</button>
+            <button class="modal-btn modal-btn-danger" id="deleteModalYes">Yes, Delete</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/archives.js') }}"></script>
+{% endblock %}
