@@ -90,87 +90,121 @@ EOF
     local xz_basename=$(basename "${iso_path%.iso*}.iso.xz")  # e.g., TITLE-1234567890.iso.xz
     local archive_xz_path="${ISO_ARCHIVE_PATH}/${xz_basename}"  # Final location
 
-    # Ensure archive directory exists
-    if [[ ! -d "$ISO_ARCHIVE_PATH" ]]; then
+    # Ensure archive directory exists (for local archives when compression enabled)
+    if [[ "${ENABLE_ISO_COMPRESS_FOR_ARCHIVAL:-0}" == "1" ]] && [[ ! -d "$ISO_ARCHIVE_PATH" ]]; then
         log_info "[ARCHIVE] Creating archive directory: $ISO_ARCHIVE_PATH"
         mkdir -p "$ISO_ARCHIVE_PATH"
         chmod 2775 "$ISO_ARCHIVE_PATH" 2>/dev/null || true
     fi
 
-    # Step 1: Compress ISO (in staging directory)
-    log_info "[ARCHIVE] Step 1/5: Compressing ISO..."
-    if ! compress_iso "$iso_path"; then
-        log_error "[ARCHIVE] Compression failed"
-        remove_state_file "$state_file_archiving"
-        return 1
-    fi
-
-    local compression_end=$(date +%s)
-    local compression_time=$((compression_end - compression_start))
-
-    # Step 2: Generate PAR2 recovery files (if enabled)
-    if [[ "$ENABLE_PAR2_RECOVERY" == "1" ]]; then
-        log_info "[ARCHIVE] Step 2/5: Generating PAR2 recovery files..."
-        if ! generate_recovery_files "$staging_xz_path"; then
-            log_warn "[ARCHIVE] PAR2 generation failed (continuing without recovery files)"
-        fi
-    else
-        log_info "[ARCHIVE] Step 2/5: PAR2 recovery disabled, skipping..."
-    fi
-
-    # Step 3: Verify compressed file integrity
-    log_info "[ARCHIVE] Step 3/5: Verifying compressed file integrity..."
-    if ! verify_compressed_iso "$staging_xz_path"; then
-        log_error "[ARCHIVE] Integrity verification failed - compressed file may be corrupt"
-        # Clean up corrupt archive
-        rm -f "$staging_xz_path" "${staging_xz_path}"*.par2
-        remove_state_file "$state_file_archiving"
-        return 1
-    fi
-
-    # Step 4: Move to local archive path (ISO_ARCHIVE_PATH)
-    log_info "[ARCHIVE] Step 4/5: Moving to archive location..."
-    if ! mv "$staging_xz_path" "$archive_xz_path" 2>/dev/null; then
-        log_error "[ARCHIVE] Failed to move archive to: $archive_xz_path"
-        rm -f "$staging_xz_path" "${staging_xz_path}"*.par2
-        remove_state_file "$state_file_archiving"
-        return 1
-    fi
-    log_info "[ARCHIVE] Archive moved to: $archive_xz_path"
-
-    # Move PAR2 files to archive location too
-    local par2_files
-    par2_files=$(find "$(dirname "$staging_xz_path")" -maxdepth 1 -name "$(basename "$staging_xz_path")*.par2" 2>/dev/null || true)
-    if [[ -n "$par2_files" ]]; then
-        while IFS= read -r par2_file; do
-            [[ -z "$par2_file" ]] && continue
-            mv "$par2_file" "$ISO_ARCHIVE_PATH/" 2>/dev/null || log_warn "[ARCHIVE] Could not move PAR2 file: $par2_file"
-        done <<< "$par2_files"
-    fi
-
-    # Step 5: Transfer to remote NAS (if configured - separate from local archive)
+    # Branch based on compression setting
     local nas_path=""
-    local xz_path="$archive_xz_path"  # Use the final archive location for metadata
-    if [[ -n "$NAS_ARCHIVE_PATH" ]]; then
-        log_info "[ARCHIVE] Step 5/5: Transferring archive to remote NAS..."
-        if transfer_archive_to_nas "$archive_xz_path"; then
-            nas_path="${NAS_ARCHIVE_PATH}/$(basename "$archive_xz_path")"
-            log_info "[ARCHIVE] Archive transferred to: $nas_path"
+    local xz_path=""
+    local compression_time=0
 
-            # Clean up local archive if configured (since remote has it)
-            if [[ "$DELETE_LOCAL_XZ_AFTER_ARCHIVE" == "1" ]]; then
-                log_info "[ARCHIVE] Removing local archive files (remote copy exists)..."
-                rm -f "$archive_xz_path"
-                rm -f "${archive_xz_path}"*.par2
+    if [[ "${ENABLE_ISO_COMPRESS_FOR_ARCHIVAL:-0}" == "1" ]]; then
+        # ====================================================================
+        # COMPRESSED ARCHIVE PATH: Compress ISO, then transfer .xz to NAS
+        # ====================================================================
+        log_info "[ARCHIVE] Compression enabled - compressing before transfer"
+
+        # Step 1: Compress ISO (in staging directory)
+        log_info "[ARCHIVE] Step 1/5: Compressing ISO..."
+        if ! compress_iso "$iso_path"; then
+            log_error "[ARCHIVE] Compression failed"
+            remove_state_file "$state_file_archiving"
+            return 1
+        fi
+
+        local compression_end=$(date +%s)
+        compression_time=$((compression_end - compression_start))
+
+        # Step 2: Generate PAR2 recovery files (if enabled)
+        if [[ "$ENABLE_PAR2_RECOVERY" == "1" ]]; then
+            log_info "[ARCHIVE] Step 2/5: Generating PAR2 recovery files..."
+            if ! generate_recovery_files "$staging_xz_path"; then
+                log_warn "[ARCHIVE] PAR2 generation failed (continuing without recovery files)"
             fi
         else
-            log_error "[ARCHIVE] Transfer to remote NAS failed"
-            # Keep local files for retry
-            nas_path="(transfer failed - local files retained at $archive_xz_path)"
+            log_info "[ARCHIVE] Step 2/5: PAR2 recovery disabled, skipping..."
+        fi
+
+        # Step 3: Verify compressed file integrity
+        log_info "[ARCHIVE] Step 3/5: Verifying compressed file integrity..."
+        if ! verify_compressed_iso "$staging_xz_path"; then
+            log_error "[ARCHIVE] Integrity verification failed - compressed file may be corrupt"
+            # Clean up corrupt archive
+            rm -f "$staging_xz_path" "${staging_xz_path}"*.par2
+            remove_state_file "$state_file_archiving"
+            return 1
+        fi
+
+        # Step 4: Move to local archive path (ISO_ARCHIVE_PATH)
+        log_info "[ARCHIVE] Step 4/5: Moving to archive location..."
+        if ! mv "$staging_xz_path" "$archive_xz_path" 2>/dev/null; then
+            log_error "[ARCHIVE] Failed to move archive to: $archive_xz_path"
+            rm -f "$staging_xz_path" "${staging_xz_path}"*.par2
+            remove_state_file "$state_file_archiving"
+            return 1
+        fi
+        log_info "[ARCHIVE] Archive moved to: $archive_xz_path"
+
+        # Move PAR2 files to archive location too
+        local par2_files
+        par2_files=$(find "$(dirname "$staging_xz_path")" -maxdepth 1 -name "$(basename "$staging_xz_path")*.par2" 2>/dev/null || true)
+        if [[ -n "$par2_files" ]]; then
+            while IFS= read -r par2_file; do
+                [[ -z "$par2_file" ]] && continue
+                mv "$par2_file" "$ISO_ARCHIVE_PATH/" 2>/dev/null || log_warn "[ARCHIVE] Could not move PAR2 file: $par2_file"
+            done <<< "$par2_files"
+        fi
+
+        # Step 5: Transfer compressed archive to remote NAS (if configured)
+        xz_path="$archive_xz_path"
+        if [[ -n "$NAS_ARCHIVE_PATH" ]]; then
+            log_info "[ARCHIVE] Step 5/5: Transferring compressed archive to remote NAS..."
+            if transfer_archive_to_nas "$archive_xz_path"; then
+                nas_path="${NAS_ARCHIVE_PATH}/$(basename "$archive_xz_path")"
+                log_info "[ARCHIVE] Archive transferred to: $nas_path"
+
+                # Clean up local archive if configured (since remote has it)
+                if [[ "$DELETE_LOCAL_XZ_AFTER_ARCHIVE" == "1" ]]; then
+                    log_info "[ARCHIVE] Removing local archive files (remote copy exists)..."
+                    rm -f "$archive_xz_path"
+                    rm -f "${archive_xz_path}"*.par2
+                fi
+            else
+                log_error "[ARCHIVE] Transfer to remote NAS failed"
+                # Keep local files for retry
+                nas_path="(transfer failed - local files retained at $archive_xz_path)"
+            fi
+        else
+            log_info "[ARCHIVE] Step 5/5: No remote NAS configured, archive stored locally"
+            nas_path="local:$archive_xz_path"
         fi
     else
-        log_info "[ARCHIVE] Step 5/5: No remote NAS configured, archive stored locally"
-        nas_path="local:$archive_xz_path"
+        # ====================================================================
+        # RAW ISO TRANSFER PATH: Transfer uncompressed ISO directly to NAS
+        # ====================================================================
+        log_info "[ARCHIVE] Compression disabled - transferring raw ISO to NAS"
+
+        if [[ -z "$NAS_ARCHIVE_PATH" ]]; then
+            log_error "[ARCHIVE] NAS_ARCHIVE_PATH not configured - cannot archive without compression or remote destination"
+            remove_state_file "$state_file_archiving"
+            return 1
+        fi
+
+        # Transfer raw ISO directly to NAS
+        log_info "[ARCHIVE] Transferring ISO (${iso_size_gb}GB) to remote NAS..."
+        if transfer_iso_to_nas "$iso_path"; then
+            nas_path="${NAS_ARCHIVE_PATH}/$(basename "$iso_path")"
+            log_info "[ARCHIVE] ISO transferred to: $nas_path"
+        else
+            log_error "[ARCHIVE] ISO transfer to NAS failed"
+            nas_path="(transfer failed - ISO retained locally)"
+            remove_state_file "$state_file_archiving"
+            return 1
+        fi
     fi
 
     # Create .archived state file with complete metadata
