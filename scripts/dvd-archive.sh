@@ -184,24 +184,44 @@ EOF
         fi
     else
         # ====================================================================
-        # RAW ISO TRANSFER PATH: Transfer uncompressed ISO directly to NAS
+        # RAW ISO TRANSFER PATH: Transfer or move uncompressed ISO
         # ====================================================================
-        log_info "[ARCHIVE] Compression disabled - transferring raw ISO to NAS"
+        log_info "[ARCHIVE] Compression disabled - archiving raw ISO"
 
-        if [[ -z "$NAS_ARCHIVE_PATH" ]]; then
-            log_error "[ARCHIVE] NAS_ARCHIVE_PATH not configured - cannot archive without compression or remote destination"
-            remove_state_file "$state_file_archiving"
-            return 1
-        fi
+        if [[ -n "$NAS_ARCHIVE_PATH" ]]; then
+            # Remote NAS: Transfer raw ISO directly
+            log_info "[ARCHIVE] Transferring ISO (${iso_size_gb}GB) to remote NAS..."
+            if transfer_iso_to_nas "$iso_path"; then
+                nas_path="${NAS_ARCHIVE_PATH}/$(basename "$iso_path")"
+                log_info "[ARCHIVE] ISO transferred to: $nas_path"
+            else
+                log_error "[ARCHIVE] ISO transfer to NAS failed"
+                nas_path="(transfer failed - ISO retained locally)"
+                remove_state_file "$state_file_archiving"
+                return 1
+            fi
+        elif [[ -n "$ISO_ARCHIVE_PATH" ]]; then
+            # Local archive: Move raw ISO to archive directory
+            log_info "[ARCHIVE] Moving ISO (${iso_size_gb}GB) to local archive..."
 
-        # Transfer raw ISO directly to NAS
-        log_info "[ARCHIVE] Transferring ISO (${iso_size_gb}GB) to remote NAS..."
-        if transfer_iso_to_nas "$iso_path"; then
-            nas_path="${NAS_ARCHIVE_PATH}/$(basename "$iso_path")"
-            log_info "[ARCHIVE] ISO transferred to: $nas_path"
+            # Ensure archive directory exists
+            if [[ ! -d "$ISO_ARCHIVE_PATH" ]]; then
+                log_info "[ARCHIVE] Creating archive directory: $ISO_ARCHIVE_PATH"
+                mkdir -p "$ISO_ARCHIVE_PATH"
+                chmod 2775 "$ISO_ARCHIVE_PATH" 2>/dev/null || true
+            fi
+
+            local archive_iso_path="${ISO_ARCHIVE_PATH}/$(basename "$iso_path")"
+            if mv "$iso_path" "$archive_iso_path" 2>/dev/null; then
+                nas_path="local:$archive_iso_path"
+                log_info "[ARCHIVE] ISO moved to: $archive_iso_path"
+            else
+                log_error "[ARCHIVE] Failed to move ISO to archive"
+                remove_state_file "$state_file_archiving"
+                return 1
+            fi
         else
-            log_error "[ARCHIVE] ISO transfer to NAS failed"
-            nas_path="(transfer failed - ISO retained locally)"
+            log_error "[ARCHIVE] No archive destination configured (set NAS_ARCHIVE_PATH or ISO_ARCHIVE_PATH)"
             remove_state_file "$state_file_archiving"
             return 1
         fi
