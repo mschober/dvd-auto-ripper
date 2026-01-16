@@ -1299,6 +1299,7 @@ CLUSTER_ENABLED="${CLUSTER_ENABLED:-0}"
 CLUSTER_NODE_NAME="${CLUSTER_NODE_NAME:-}"
 CLUSTER_PEERS="${CLUSTER_PEERS:-}"
 CLUSTER_SSH_USER="${CLUSTER_SSH_USER:-}"
+CLUSTER_SSH_IDENTITY="${CLUSTER_SSH_IDENTITY:-}"
 CLUSTER_REMOTE_STAGING="${CLUSTER_REMOTE_STAGING:-/var/tmp/dvd-rips}"
 
 # Check if we should distribute a job to a peer node
@@ -1428,7 +1429,14 @@ distribute_to_peer() {
     local remote_dest="${CLUSTER_SSH_USER}@${peer_host}:${CLUSTER_REMOTE_STAGING}/"
     log_info "[CLUSTER] Rsync ISO to $remote_dest"
 
-    if ! rsync -avz --progress "$iso_path" "$remote_dest" >> "$(get_stage_log_file)" 2>&1; then
+    # Build SSH options with identity file if configured
+    local ssh_opts=""
+    if [[ -n "${CLUSTER_SSH_IDENTITY:-}" ]] && [[ -f "$CLUSTER_SSH_IDENTITY" ]]; then
+        ssh_opts="-e ssh -i $CLUSTER_SSH_IDENTITY"
+        log_debug "[CLUSTER] Using SSH identity file: $CLUSTER_SSH_IDENTITY"
+    fi
+
+    if ! rsync -avz --progress $ssh_opts "$iso_path" "$remote_dest" >> "$(get_stage_log_file)" 2>&1; then
         log_error "[CLUSTER] ISO transfer to $peer_name failed"
         # Revert state
         remove_state_file "$dist_state"
@@ -1440,7 +1448,7 @@ distribute_to_peer() {
 
     # Also transfer CSS keys directory if it exists (for cluster decryption)
     if [[ -d "${iso_path}.keys" ]]; then
-        if rsync -avz "${iso_path}.keys" "$remote_dest" >> "$(get_stage_log_file)" 2>&1; then
+        if rsync -avz $ssh_opts "${iso_path}.keys" "$remote_dest" >> "$(get_stage_log_file)" 2>&1; then
             log_info "[CLUSTER] CSS keys transferred to $peer_name"
         else
             log_warn "[CLUSTER] Could not transfer CSS keys to $peer_name (encoding may need to crack keys)"
