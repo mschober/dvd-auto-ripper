@@ -144,6 +144,9 @@ def api_accept_job():
         with open(state_file, 'w') as f:
             json.dump(metadata, f, indent=2)
 
+        # Make group-writable so encoder (dvd-encode) can update it
+        os.chmod(state_file, 0o664)
+
         # Calculate queue position (number of iso-ready files including this one)
         queue_depth = len(glob.glob(os.path.join(STAGING_DIR, "*.iso-ready")))
 
