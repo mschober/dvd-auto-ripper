@@ -168,6 +168,26 @@ def api_trigger(stage):
         return jsonify({"error": message}), 500
 
 
+@api_bp.route("/api/trigger/distribute/force", methods=["POST"])
+def api_trigger_distribute_force():
+    """API: Trigger distribute with --force flag to bypass 'keep 1 for local' logic."""
+    success, message = ServiceController.trigger_distribute_force()
+
+    # If called from form, redirect back to dashboard
+    if request.headers.get("Accept", "").startswith("text/html") or \
+       request.content_type != "application/json":
+        if success:
+            return redirect(url_for("dashboard.dashboard", message="Distribute (force) triggered successfully", type="success"))
+        else:
+            return redirect(url_for("dashboard.dashboard", message=f"Failed to trigger distribute: {message}", type="error"))
+
+    # JSON response for API calls
+    if success:
+        return jsonify({"status": "triggered", "stage": "distribute", "force": True})
+    else:
+        return jsonify({"error": message}), 500
+
+
 @api_bp.route("/api/queue/<path:state_file>/cancel", methods=["POST"])
 def api_cancel_queue_item(state_file):
     """API: Cancel/remove a queue item by state file name."""

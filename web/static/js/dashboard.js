@@ -173,7 +173,8 @@ async function executeCancel() {
 }
 
 function triggerDistribute() {
-    fetch('/api/trigger/distribute', { method: 'POST' })
+    // Use force endpoint to bypass 'keep 1 for local' logic when manually triggered
+    fetch('/api/trigger/distribute/force', { method: 'POST' })
         .then(response => {
             if (response.ok) {
                 location.reload();

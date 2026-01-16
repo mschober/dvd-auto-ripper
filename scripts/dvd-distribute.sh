@@ -27,11 +27,16 @@ distribute_pending_iso() {
     fi
 
     # Find oldest iso-ready (skip if <2 pending - keep one for local)
+    # Unless --force flag was passed (manual dashboard trigger)
     local pending
     pending=$(count_pending_state "iso-ready")
-    if [[ "$pending" -lt 2 ]]; then
+    if [[ "$pending" -lt 2 ]] && [[ "${FORCE_DISTRIBUTE:-0}" != "1" ]]; then
         log_debug "[DISTRIBUTE] Only $pending job(s) pending, keeping for local encoder"
         return 0
+    fi
+
+    if [[ "${FORCE_DISTRIBUTE:-0}" == "1" ]]; then
+        log_info "[DISTRIBUTE] Force mode enabled, distributing regardless of pending count"
     fi
 
     local state_file
@@ -89,6 +94,20 @@ check_distribute_recovery() {
 # ============================================================================
 
 main() {
+    # Parse arguments
+    FORCE_DISTRIBUTE=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force|-f)
+                FORCE_DISTRIBUTE=1
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
     # Initialize
     init_logging || exit 1
 
