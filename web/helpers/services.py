@@ -270,3 +270,22 @@ class ServiceController:
             return result.returncode == 0, result.stderr.strip() or "OK"
         except Exception as e:
             return False, str(e)
+
+    @staticmethod
+    def trigger_distribute_force():
+        """Trigger distribute with --force flag to bypass 'keep 1 for local' logic.
+
+        Calls the script directly instead of using systemctl, since we need
+        to pass the --force argument.
+
+        Returns:
+            tuple: (success, message)
+        """
+        try:
+            result = subprocess.run(
+                ["/usr/local/bin/dvd-distribute.sh", "--force"],
+                capture_output=True, text=True, timeout=60
+            )
+            return result.returncode == 0, result.stderr.strip() or "OK"
+        except Exception as e:
+            return False, str(e)

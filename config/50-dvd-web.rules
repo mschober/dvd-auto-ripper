@@ -7,8 +7,14 @@
 //   - dvd-iso@*.service (ISO creation)
 //   - dvd-encoder.service (encoding)
 //   - dvd-encoder.timer
+//   - dvd-distribute.service (cluster distribution)
+//   - dvd-distribute.timer
 //   - dvd-transfer.service (NAS transfer)
 //   - dvd-transfer.timer
+//   - dvd-archive.service (ISO archival)
+//   - dvd-archive.timer
+//   - dvd-audit.service (MKV audit)
+//   - dvd-audit.timer
 //   - dvd-ripper@*.service (legacy mode)
 //   - dvd-dashboard.service (self-restart)
 //   - dvd-udev-control@*.service (pause/resume udev trigger)
@@ -28,8 +34,14 @@ polkit.addRule(function(action, subject) {
             unit.match(/^dvd-iso@.*\.service$/) ||
             unit === "dvd-encoder.service" ||
             unit === "dvd-encoder.timer" ||
+            unit === "dvd-distribute.service" ||
+            unit === "dvd-distribute.timer" ||
             unit === "dvd-transfer.service" ||
             unit === "dvd-transfer.timer" ||
+            unit === "dvd-archive.service" ||
+            unit === "dvd-archive.timer" ||
+            unit === "dvd-audit.service" ||
+            unit === "dvd-audit.timer" ||
             unit.match(/^dvd-ripper@.*\.service$/) ||
             unit === "dvd-dashboard.service" ||
             unit.match(/^dvd-udev-control@.*\.service$/)
