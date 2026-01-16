@@ -20,8 +20,9 @@
     # Don't rotate if log is empty
     notifempty
 
-    # Create new log file with these permissions after rotation
-    create 0660 root dvd-ripper
+    # Copy and truncate instead of moving - preserves original ownership
+    # This is important because different log files have different service user owners
+    copytruncate
 
     # Use date as suffix for rotated logs
     dateext
