@@ -781,11 +781,20 @@ init_logging() {
     # Get the log file for the current stage
     local log_file=$(get_stage_log_file)
 
-    # Ensure log file is writable
-    touch "$log_file" 2>/dev/null || {
-        echo "ERROR: Cannot write to log file: $log_file" >&2
-        return 1
-    }
+    # Ensure log file exists and is writable (use >> instead of touch for kernel 6.17+ compatibility)
+    # touch fails on newer kernels when file is owned by different user, even with group write
+    if [[ ! -f "$log_file" ]]; then
+        touch "$log_file" 2>/dev/null || {
+            echo "ERROR: Cannot create log file: $log_file" >&2
+            return 1
+        }
+    else
+        # Test write permission by appending nothing
+        : >> "$log_file" 2>/dev/null || {
+            echo "ERROR: Cannot write to log file: $log_file" >&2
+            return 1
+        }
+    fi
 
     log_info "==================== DVD Ripper Started ===================="
     return 0
