@@ -53,7 +53,8 @@ create_dvd_iso() {
     # Generate paths
     local timestamp=$(date +%s)
     local sanitized_title=$(sanitize_filename "$title")
-    iso_path="${STAGING_DIR}/${sanitized_title}-${timestamp}.mp4"
+    # iso_path="${STAGING_DIR}/${sanitized_title}-${timestamp}.mp4"
+    iso_path="${STAGING_DIR}/" # dvdbackup creates a directory structure, not a single file
 
     # Build metadata for state file
     local metadata=$(build_state_metadata "$sanitized_title" "$year" "$timestamp" "$main_title" "$iso_path")

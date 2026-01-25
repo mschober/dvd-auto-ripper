@@ -269,26 +269,26 @@ create_iso() {
 
     log_info "Creating ISO from $device to $output_file"
 
-    # Check if HandbrakeCLI is available
-    if ! command -v HandBrakeCLI &>/dev/null; then
-        log_error "HandBrakeCLI not found. Install with: sudo apt-get install handbrake-cli"
+    # Check if dvdbackup is available
+    if ! command -v dvdbackup &>/dev/null; then
+        log_error "dvdbackup not found. Install with: sudo apt-get install dvdbackup"
         return 1
     fi
 
-    # Run HandBrakeCLI to create ISO HandBrakeCLI --input /dev/sr0 --output "Movie_HEVC.mkv" --format av_mkv --encoder x265 --quality 22 --main-feature
-    if HandBrakeCLI --input "$device" --output "$output_file" --format av_mp4 --encoder x264 --quality 22 --main-feature --optimize >> "$(get_device_log_file)" 2>&1; then
+    # Run dvdbackup to create dvd archive full structure
+    if dvdbackup -M -i "$device" -o "$output_file" >> "$(get_device_log_file)" 2>&1; then
         log_info "ISO creation completed successfully"
 
         # Verify ISO file exists and has reasonable size
-        if [[ -f "$output_file" ]]; then
-            local video_file_size=$(stat -c%s "$output_file" 2>/dev/null || echo "0")
-            local video_file_size_mb=$((video_file_size / 1024 / 1024))
-            log_info "ISO size: ${video_file_size_mb}MB"
+        # if [[ -f "$output_file" ]]; then
+        #     local video_file_size=$(stat -c%s "$output_file" 2>/dev/null || echo "0")
+        #     local video_file_size_mb=$((video_file_size / 1024 / 1024))
+        #     log_info "ISO size: ${video_file_size_mb}MB"
 
-            if [[ $video_file_size_mb -lt 100 ]]; then
-                log_warn "ISO file seems too small (${video_file_size_mb}MB), may be incomplete"
-            fi
-        fi
+        #     if [[ $video_file_size_mb -lt 100 ]]; then
+        #         log_warn "ISO file seems too small (${video_file_size_mb}MB), may be incomplete"
+        #     fi
+        # fi
 
         return 0
     else

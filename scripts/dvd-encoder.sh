@@ -188,18 +188,32 @@ encode_iso() {
     log_info "[ENCODER] Preset: $HANDBRAKE_PRESET, Quality: $HANDBRAKE_QUALITY"
 
     # Build HandBrake command
+# Build HandBrake command
     local handbrake_cmd="HandBrakeCLI"
-    handbrake_cmd+=" -i \"$iso_path\""
+    
+    # -i now points to the folder created by dvdbackup, not a .iso file
+    handbrake_cmd+=" -i \"$iso_path/Contraband\"" 
+    
+    # Ensure output ends in .mp4 and use the optimize flag for Plex
     handbrake_cmd+=" -o \"$output_path\""
-    handbrake_cmd+=" --preset \"$HANDBRAKE_PRESET\""
-    handbrake_cmd+=" -q \"$HANDBRAKE_QUALITY\""
+    handbrake_cmd+=" --format av_mp4"
+    handbrake_cmd+=" --optimize"
 
-    # Add main title selection if available
+    # Set encoder to x264 (HEVC) as requested
+    handbrake_cmd+=" -e x264"
+    handbrake_cmd+=" -q \"${HANDBRAKE_QUALITY:-22}\""
+    
+    # Use the preset (e.g., "medium" or "slow")
+    handbrake_cmd+=" --encoder-preset \"${HANDBRAKE_PRESET:-medium}\""
+
+    # Select the specific title found during your scan
     if [[ -n "$main_title" ]]; then
         handbrake_cmd+=" -t \"$main_title\""
+    else
+        handbrake_cmd+=" --main-feature"
     fi
 
-    # Add extra options if specified
+    # Append any other flags (like audio or subtitles)
     if [[ -n "${HANDBRAKE_EXTRA_OPTS:-}" ]]; then
         handbrake_cmd+=" $HANDBRAKE_EXTRA_OPTS"
     fi
