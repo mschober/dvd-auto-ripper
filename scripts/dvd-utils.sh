@@ -269,16 +269,14 @@ create_iso() {
 
     log_info "Creating ISO from $device to $output_iso"
 
-    # Check if ddrescue is available
-    if ! command -v ddrescue &>/dev/null; then
-        log_error "ddrescue not found. Install with: sudo apt-get install gddrescue"
+    # Check if HandbrakeCLI is available
+    if ! command -v HandBrakeCLI &>/dev/null; then
+        log_error "HandBrakeCLI not found. Install with: sudo apt-get install handbrake-cli"
         return 1
     fi
 
-    # Run ddrescue with error recovery
-    # -n = no scraping (faster initial pass)
-    # -b 2048 = DVD sector size
-    if ddrescue -n -b 2048 "$device" "$output_iso" "$mapfile" >> "$(get_device_log_file)" 2>&1; then
+    # Run HandBrakeCLI to create ISO HandBrakeCLI --input /dev/sr0 --output "Movie_HEVC.mkv" --format av_mkv --encoder x265 --quality 22 --main-feature
+    if HandBrakeCLI --input "$device" --output "$output_iso" --format av_mkv --encoder x265 --quality 22 --main-feature >> "$(get_device_log_file)" 2>&1; then
         log_info "ISO creation completed successfully"
 
         # Verify ISO file exists and has reasonable size
@@ -297,6 +295,35 @@ create_iso() {
         log_error "ISO creation failed"
         return 1
     fi
+
+    # # Check if ddrescue is available
+    # if ! command -v ddrescue &>/dev/null; then
+    #     log_error "ddrescue not found. Install with: sudo apt-get install gddrescue"
+    #     return 1
+    # fi
+
+    # # Run ddrescue with error recovery
+    # # -n = no scraping (faster initial pass)
+    # # -b 2048 = DVD sector size
+    # if ddrescue -n -b 2048 "$device" "$output_iso" "$mapfile" >> "$(get_device_log_file)" 2>&1; then
+    #     log_info "ISO creation completed successfully"
+
+    #     # Verify ISO file exists and has reasonable size
+    #     if [[ -f "$output_iso" ]]; then
+    #         local iso_size=$(stat -c%s "$output_iso" 2>/dev/null || echo "0")
+    #         local iso_size_mb=$((iso_size / 1024 / 1024))
+    #         log_info "ISO size: ${iso_size_mb}MB"
+
+    #         if [[ $iso_size_mb -lt 100 ]]; then
+    #             log_warn "ISO file seems too small (${iso_size_mb}MB), may be incomplete"
+    #         fi
+    #     fi
+
+    #     return 0
+    # else
+    #     log_error "ISO creation failed"
+    #     return 1
+    # fi
 }
 
 # Extract DVD metadata using handbrake

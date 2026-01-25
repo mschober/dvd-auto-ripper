@@ -3,7 +3,7 @@ Description=DVD Encoder Service (Pipeline Stage 2)
 Documentation=https://github.com/mschober/dvd-auto-ripper
 After=network.target
 # Refuse to start if encoder is already running (lock file exists)
-ConditionPathExists=!/run/dvd-ripper/encoder.lock
+ConditionPathExists=!/var/run/dvd-ripper/encoder.lock
 
 [Service]
 Type=oneshot
