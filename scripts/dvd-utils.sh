@@ -276,7 +276,7 @@ create_iso() {
     fi
 
     # Run HandBrakeCLI to create ISO HandBrakeCLI --input /dev/sr0 --output "Movie_HEVC.mkv" --format av_mkv --encoder x265 --quality 22 --main-feature
-    if HandBrakeCLI --input "$device" --output "$output_iso" --format av_mkv --encoder x265 --quality 22 --main-feature >> "$(get_device_log_file)" 2>&1; then
+    if HandBrakeCLI --input "$device" --output "$output_file" --format av_mp4 --encoder x264 --quality 22 --main-feature --optimize >> "$(get_device_log_file)" 2>&1; then
         log_info "ISO creation completed successfully"
 
         # Verify ISO file exists and has reasonable size
