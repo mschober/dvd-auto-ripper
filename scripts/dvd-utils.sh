@@ -264,10 +264,10 @@ is_dvd_readable() {
 # Returns: 0 on success, 1 on failure
 create_iso() {
     local device="$1"
-    local output_iso="$2"
-    local mapfile="${output_iso}.mapfile"
+    local output_file="$2"
+    # local mapfile="${output_iso}.mapfile"
 
-    log_info "Creating ISO from $device to $output_iso"
+    log_info "Creating ISO from $device to $output_file"
 
     # Check if HandbrakeCLI is available
     if ! command -v HandBrakeCLI &>/dev/null; then
@@ -280,13 +280,13 @@ create_iso() {
         log_info "ISO creation completed successfully"
 
         # Verify ISO file exists and has reasonable size
-        if [[ -f "$output_iso" ]]; then
-            local iso_size=$(stat -c%s "$output_iso" 2>/dev/null || echo "0")
-            local iso_size_mb=$((iso_size / 1024 / 1024))
-            log_info "ISO size: ${iso_size_mb}MB"
+        if [[ -f "$output_file" ]]; then
+            local video_file_size=$(stat -c%s "$output_file" 2>/dev/null || echo "0")
+            local video_file_size_mb=$((video_file_size / 1024 / 1024))
+            log_info "ISO size: ${video_file_size_mb}MB"
 
-            if [[ $iso_size_mb -lt 100 ]]; then
-                log_warn "ISO file seems too small (${iso_size_mb}MB), may be incomplete"
+            if [[ $video_file_size_mb -lt 100 ]]; then
+                log_warn "ISO file seems too small (${video_file_size_mb}MB), may be incomplete"
             fi
         fi
 
