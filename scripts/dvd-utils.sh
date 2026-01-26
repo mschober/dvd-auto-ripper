@@ -15,6 +15,7 @@ LOCK_FILE="${LOCK_FILE:-/run/dvd-ripper/dvd-ripper.pid}"
 MAX_RETRIES="${MAX_RETRIES:-3}"
 RETRY_DELAY="${RETRY_DELAY:-60}"
 DISK_USAGE_THRESHOLD="${DISK_USAGE_THRESHOLD:-80}"
+RIP_METHOD="${RIP_METHOD:-ddrescue}"
 
 # Per-stage logging configuration
 LOG_DIR="${LOG_DIR:-/var/log/dvd-ripper}"
@@ -259,71 +260,103 @@ is_dvd_readable() {
     return 0
 }
 
-# Create ISO image from DVD using ddrescue
-# Usage: create_iso DEVICE OUTPUT_ISO
+# Create disc backup from DVD
+# Usage: create_iso DEVICE OUTPUT_PATH
 # Returns: 0 on success, 1 on failure
+# RIP_METHOD controls the approach:
+#   ddrescue  = creates .iso file (OUTPUT_PATH should end in .iso)
+#   dvdbackup = creates directory (OUTPUT_PATH is the directory path)
 create_iso() {
     local device="$1"
-    local output_file="$2"
-    # local mapfile="${output_iso}.mapfile"
+    local output_path="$2"
 
-    log_info "Creating ISO from $device to $output_file"
+    log_info "Creating disc backup from $device (method: $RIP_METHOD)"
 
-    # Check if dvdbackup is available
-    if ! command -v dvdbackup &>/dev/null; then
-        log_error "dvdbackup not found. Install with: sudo apt-get install dvdbackup"
+    case "$RIP_METHOD" in
+        ddrescue)
+            _create_iso_ddrescue "$device" "$output_path"
+            ;;
+        dvdbackup)
+            _create_iso_dvdbackup "$device" "$output_path"
+            ;;
+        *)
+            log_error "Unknown RIP_METHOD: $RIP_METHOD"
+            return 1
+            ;;
+    esac
+}
+
+# Internal: Create ISO using ddrescue (error recovery, .iso file output)
+_create_iso_ddrescue() {
+    local device="$1"
+    local output_iso="$2"
+    local mapfile="${output_iso}.mapfile"
+
+    if ! command -v ddrescue &>/dev/null; then
+        log_error "ddrescue not found. Install with: sudo apt-get install gddrescue"
         return 1
     fi
 
-    # Run dvdbackup to create dvd archive full structure
-    if dvdbackup -M -i "$device" -o "$output_file" >> "$(get_device_log_file)" 2>&1; then
+    # Run ddrescue with error recovery
+    # -n = no scraping (faster initial pass)
+    # -b 2048 = DVD sector size
+    if ddrescue -n -b 2048 "$device" "$output_iso" "$mapfile" >> "$(get_device_log_file)" 2>&1; then
         log_info "ISO creation completed successfully"
 
-        # Verify ISO file exists and has reasonable size
-        # if [[ -f "$output_file" ]]; then
-        #     local video_file_size=$(stat -c%s "$output_file" 2>/dev/null || echo "0")
-        #     local video_file_size_mb=$((video_file_size / 1024 / 1024))
-        #     log_info "ISO size: ${video_file_size_mb}MB"
+        if [[ -f "$output_iso" ]]; then
+            local iso_size=$(stat -c%s "$output_iso" 2>/dev/null || echo "0")
+            local iso_size_mb=$((iso_size / 1024 / 1024))
+            log_info "ISO size: ${iso_size_mb}MB"
 
-        #     if [[ $video_file_size_mb -lt 100 ]]; then
-        #         log_warn "ISO file seems too small (${video_file_size_mb}MB), may be incomplete"
-        #     fi
-        # fi
+            if [[ $iso_size_mb -lt 100 ]]; then
+                log_warn "ISO file seems too small (${iso_size_mb}MB), may be incomplete"
+            fi
+        fi
 
         return 0
     else
         log_error "ISO creation failed"
         return 1
     fi
+}
 
-    # # Check if ddrescue is available
-    # if ! command -v ddrescue &>/dev/null; then
-    #     log_error "ddrescue not found. Install with: sudo apt-get install gddrescue"
-    #     return 1
-    # fi
+# Internal: Create DVD backup using dvdbackup (directory output)
+_create_iso_dvdbackup() {
+    local device="$1"
+    local output_path="$2"
+    local output_dir
+    output_dir="$(dirname "$output_path")"
+    local output_name
+    output_name="$(basename "$output_path")"
 
-    # # Run ddrescue with error recovery
-    # # -n = no scraping (faster initial pass)
-    # # -b 2048 = DVD sector size
-    # if ddrescue -n -b 2048 "$device" "$output_iso" "$mapfile" >> "$(get_device_log_file)" 2>&1; then
-    #     log_info "ISO creation completed successfully"
+    if ! command -v dvdbackup &>/dev/null; then
+        log_error "dvdbackup not found. Install with: sudo apt-get install dvdbackup"
+        return 1
+    fi
 
-    #     # Verify ISO file exists and has reasonable size
-    #     if [[ -f "$output_iso" ]]; then
-    #         local iso_size=$(stat -c%s "$output_iso" 2>/dev/null || echo "0")
-    #         local iso_size_mb=$((iso_size / 1024 / 1024))
-    #         log_info "ISO size: ${iso_size_mb}MB"
+    # Run dvdbackup to create full DVD structure
+    # -M = mirror entire disc
+    # -n = override output directory name to match our naming convention
+    # -o = parent output directory
+    if dvdbackup -M -i "$device" -n "$output_name" -o "$output_dir" >> "$(get_device_log_file)" 2>&1; then
+        log_info "DVD backup completed successfully"
 
-    #         if [[ $iso_size_mb -lt 100 ]]; then
-    #             log_warn "ISO file seems too small (${iso_size_mb}MB), may be incomplete"
-    #         fi
-    #     fi
+        if [[ -d "$output_path" ]]; then
+            local dir_size
+            dir_size=$(du -sb "$output_path" 2>/dev/null | cut -f1)
+            local dir_size_mb=$((dir_size / 1024 / 1024))
+            log_info "DVD backup size: ${dir_size_mb}MB"
 
-    #     return 0
-    # else
-    #     log_error "ISO creation failed"
-    #     return 1
-    # fi
+            if [[ $dir_size_mb -lt 100 ]]; then
+                log_warn "DVD backup seems too small (${dir_size_mb}MB), may be incomplete"
+            fi
+        fi
+
+        return 0
+    else
+        log_error "DVD backup failed"
+        return 1
+    fi
 }
 
 # Extract DVD metadata using handbrake
@@ -535,6 +568,41 @@ verify_file_size() {
 
     log_info "File size verification passed: ${size_mb}MB"
     return 0
+}
+
+# Verify a rip (file or directory) exists
+# Usage: verify_rip_exists PATH
+# Returns: 0 if exists, 1 if not
+verify_rip_exists() {
+    local path="$1"
+    [[ -e "$path" ]]
+}
+
+# Get size of a rip in bytes (handles both files and directories)
+# Usage: get_rip_size PATH
+# Returns: size in bytes on stdout
+get_rip_size() {
+    local path="$1"
+    if [[ -f "$path" ]]; then
+        stat -c%s "$path" 2>/dev/null || echo "0"
+    elif [[ -d "$path" ]]; then
+        du -sb "$path" 2>/dev/null | cut -f1 || echo "0"
+    else
+        echo "0"
+    fi
+}
+
+# Remove a rip (handles both files and directories)
+# Usage: remove_rip PATH
+remove_rip() {
+    local path="$1"
+    if [[ -d "$path" ]]; then
+        log_info "Removing directory: $path"
+        rm -rf "$path"
+    elif [[ -f "$path" ]]; then
+        log_info "Removing file: $path"
+        rm -f "$path"
+    fi
 }
 
 # Transfer file to NAS
@@ -1442,9 +1510,9 @@ distribute_to_peer() {
 
     log_info "[CLUSTER] Distributing '$title' to peer $peer_name"
 
-    # Verify ISO exists
-    if [[ ! -f "$iso_path" ]]; then
-        log_error "[CLUSTER] ISO file not found: $iso_path"
+    # Verify rip exists (ISO file or dvdbackup directory)
+    if ! verify_rip_exists "$iso_path"; then
+        log_error "[CLUSTER] Rip not found: $iso_path"
         return 1
     fi
 
@@ -1555,6 +1623,7 @@ build_state_metadata() {
   "mkv_path": "$mkv_path",
   "preview_path": "$preview_path",
   "nas_path": "$nas_path",
+  "rip_method": "$RIP_METHOD",
   "needs_identification": $needs_id,
   "created_at": "$created_at"
 }
@@ -1710,9 +1779,9 @@ find_archivable_isos() {
         # Read ISO path from marker file metadata
         local iso_path=$(parse_json_field "$(cat "$marker_file" 2>/dev/null)" "iso_path")
 
-        # Verify ISO still exists
-        if [[ -z "$iso_path" ]] || [[ ! -f "$iso_path" ]]; then
-            log_warn "ISO missing for marker: $marker_file"
+        # Verify rip still exists (file for ddrescue, directory for dvdbackup)
+        if [[ -z "$iso_path" ]] || ! verify_rip_exists "$iso_path"; then
+            log_warn "Rip missing for marker: $marker_file"
             continue
         fi
 

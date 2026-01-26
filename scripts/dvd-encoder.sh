@@ -153,18 +153,23 @@ encode_iso() {
     main_title=$(parse_json_field "$metadata" "main_title")
     iso_path=$(parse_json_field "$metadata" "iso_path")
 
+    local rip_method
+    rip_method=$(parse_json_field "$metadata" "rip_method")
+
     log_info "[ENCODER] Title: '$sanitized_title', Year: '$year', ISO: $iso_path"
 
-    # Verify ISO exists
-    if [[ ! -f "$iso_path" ]]; then
-        log_error "[ENCODER] ISO file not found: $iso_path"
+    # Verify rip exists (file for ddrescue, directory for dvdbackup)
+    if ! verify_rip_exists "$iso_path"; then
+        log_error "[ENCODER] Rip not found: $iso_path"
         log_warn "[ENCODER] Removing orphaned state file"
         remove_state_file "$state_file"
         return 1
     fi
 
-    # Prepare CSS cache (import packaged keys or clear partial cache)
-    prepare_dvdcss_cache "$iso_path"
+    # Prepare CSS cache (only needed for ddrescue ISOs; dvdbackup handles CSS during rip)
+    if [[ "$rip_method" != "dvdbackup" ]]; then
+        prepare_dvdcss_cache "$iso_path"
+    fi
 
     # Generate Plex-friendly output filename (e.g., "The Matrix (1999).mkv")
     output_filename=$(generate_plex_filename "$sanitized_title" "$year" "$HANDBRAKE_FORMAT")
@@ -188,32 +193,19 @@ encode_iso() {
     log_info "[ENCODER] Preset: $HANDBRAKE_PRESET, Quality: $HANDBRAKE_QUALITY"
 
     # Build HandBrake command
-# Build HandBrake command
+    # -i accepts both ISO files (ddrescue) and directories (dvdbackup)
     local handbrake_cmd="HandBrakeCLI"
-    
-    # -i now points to the folder created by dvdbackup, not a .iso file
-    handbrake_cmd+=" -i \"$iso_path/Contraband\"" 
-    
-    # Ensure output ends in .mp4 and use the optimize flag for Plex
+    handbrake_cmd+=" -i \"$iso_path\""
     handbrake_cmd+=" -o \"$output_path\""
-    handbrake_cmd+=" --format av_mp4"
-    handbrake_cmd+=" --optimize"
+    handbrake_cmd+=" --preset \"$HANDBRAKE_PRESET\""
+    handbrake_cmd+=" -q \"$HANDBRAKE_QUALITY\""
 
-    # Set encoder to x264 (HEVC) as requested
-    handbrake_cmd+=" -e x264"
-    handbrake_cmd+=" -q \"${HANDBRAKE_QUALITY:-22}\""
-    
-    # Use the preset (e.g., "medium" or "slow")
-    handbrake_cmd+=" --encoder-preset \"${HANDBRAKE_PRESET:-medium}\""
-
-    # Select the specific title found during your scan
     if [[ -n "$main_title" ]]; then
         handbrake_cmd+=" -t \"$main_title\""
     else
         handbrake_cmd+=" --main-feature"
     fi
 
-    # Append any other flags (like audio or subtitles)
     if [[ -n "${HANDBRAKE_EXTRA_OPTS:-}" ]]; then
         handbrake_cmd+=" $HANDBRAKE_EXTRA_OPTS"
     fi
@@ -283,7 +275,7 @@ encode_iso() {
 
     # Create archive-ready marker (ISO remains unchanged for archival)
     local archive_marker="${iso_path}.archive-ready"
-    if [[ -f "$iso_path" ]]; then
+    if verify_rip_exists "$iso_path"; then
         local marker_content="{\"iso_path\": \"$iso_path\", \"marked_at\": \"$(date -Iseconds)\", \"title\": \"$sanitized_title\", \"timestamp\": \"$timestamp\"}"
         if echo "$marker_content" > "$archive_marker" 2>/dev/null; then
             chmod 664 "$archive_marker" 2>/dev/null || true
@@ -491,18 +483,23 @@ encode_iso_from_encoding() {
     main_title=$(parse_json_field "$metadata" "main_title")
     iso_path=$(parse_json_field "$metadata" "iso_path")
 
+    local rip_method
+    rip_method=$(parse_json_field "$metadata" "rip_method")
+
     log_info "[ENCODER] Title: '$sanitized_title', Year: '$year', ISO: $iso_path"
 
-    # Verify ISO exists
-    if [[ ! -f "$iso_path" ]]; then
-        log_error "[ENCODER] ISO file not found: $iso_path"
+    # Verify rip exists (file for ddrescue, directory for dvdbackup)
+    if ! verify_rip_exists "$iso_path"; then
+        log_error "[ENCODER] Rip not found: $iso_path"
         log_warn "[ENCODER] Removing orphaned state file"
         remove_state_file "$state_file"
         return 1
     fi
 
-    # Prepare CSS cache (import packaged keys or clear partial cache)
-    prepare_dvdcss_cache "$iso_path"
+    # Prepare CSS cache (only needed for ddrescue ISOs; dvdbackup handles CSS during rip)
+    if [[ "$rip_method" != "dvdbackup" ]]; then
+        prepare_dvdcss_cache "$iso_path"
+    fi
 
     # Generate Plex-friendly output filename
     output_filename=$(generate_plex_filename "$sanitized_title" "$year" "$HANDBRAKE_FORMAT")
@@ -525,6 +522,7 @@ encode_iso_from_encoding() {
     log_info "[ENCODER] Preset: $HANDBRAKE_PRESET, Quality: $HANDBRAKE_QUALITY"
 
     # Build HandBrake command
+    # -i accepts both ISO files (ddrescue) and directories (dvdbackup)
     local handbrake_cmd="HandBrakeCLI"
     handbrake_cmd+=" -i \"$iso_path\""
     handbrake_cmd+=" -o \"$output_path\""
@@ -533,6 +531,8 @@ encode_iso_from_encoding() {
 
     if [[ -n "$main_title" ]]; then
         handbrake_cmd+=" -t \"$main_title\""
+    else
+        handbrake_cmd+=" --main-feature"
     fi
 
     if [[ -n "${HANDBRAKE_EXTRA_OPTS:-}" ]]; then
@@ -596,7 +596,7 @@ encode_iso_from_encoding() {
 
     # Create archive-ready marker (ISO remains unchanged for archival)
     local archive_marker="${iso_path}.archive-ready"
-    if [[ -f "$iso_path" ]]; then
+    if verify_rip_exists "$iso_path"; then
         local marker_content="{\"iso_path\": \"$iso_path\", \"marked_at\": \"$(date -Iseconds)\", \"title\": \"$sanitized_title\", \"timestamp\": \"$timestamp\"}"
         if echo "$marker_content" > "$archive_marker" 2>/dev/null; then
             chmod 664 "$archive_marker" 2>/dev/null || true

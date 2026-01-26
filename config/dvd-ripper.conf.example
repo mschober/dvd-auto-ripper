@@ -22,6 +22,11 @@ CREATE_ISO="0"
 # If CREATE_ISO=1, encodes from ISO; otherwise encodes directly from DVD
 ENCODE_VIDEO="1"
 
+# Ripping method: "ddrescue" or "dvdbackup"
+# ddrescue  = Create .iso file with error recovery (default, better for damaged discs)
+# dvdbackup = Create VIDEO_TS directory structure (faster, no error recovery)
+RIP_METHOD="ddrescue"
+
 # ============================================================================
 # NAS Configuration
 # ============================================================================
