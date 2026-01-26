@@ -300,7 +300,16 @@ _create_iso_ddrescue() {
     # Run ddrescue with error recovery
     # -n = no scraping (faster initial pass)
     # -b 2048 = DVD sector size
-    if ddrescue -n -b 2048 "$device" "$output_iso" "$mapfile" >> "$(get_device_log_file)" 2>&1; then
+    local ddrescue_cmd="ddrescue"
+    ddrescue_cmd+=" -n -b 2048"
+    ddrescue_cmd+=" \"$device\""
+    ddrescue_cmd+=" \"$output_iso\""
+    ddrescue_cmd+=" \"$mapfile\""
+
+    log_info "Running: $ddrescue_cmd"
+    eval "$ddrescue_cmd" >> "$(get_device_log_file)" 2>&1
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then
         log_info "ISO creation completed successfully"
 
         if [[ -f "$output_iso" ]]; then
@@ -339,7 +348,16 @@ _create_iso_dvdbackup() {
     # -p = show progress (e.g. "Copying VTS_01_1.VOB: 45% done (1800/4000 MiB)")
     # -n = override output directory name to match our naming convention
     # -o = parent output directory
-    if dvdbackup -M -p -i "$device" -n "$output_name" -o "$output_dir" >> "$(get_device_log_file)" 2>&1; then
+    local dvdbackup_cmd="dvdbackup"
+    dvdbackup_cmd+=" -M -p"
+    dvdbackup_cmd+=" -i \"$device\""
+    dvdbackup_cmd+=" -n \"$output_name\""
+    dvdbackup_cmd+=" -o \"$output_dir\""
+
+    log_info "Running: $dvdbackup_cmd"
+    eval "$dvdbackup_cmd" >> "$(get_device_log_file)" 2>&1
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then
         log_info "DVD backup completed successfully"
 
         if [[ -d "$output_path" ]]; then

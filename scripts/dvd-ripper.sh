@@ -139,9 +139,11 @@ rip_dvd() {
 
     while [[ $rip_attempt -le $MAX_RETRIES ]]; do
         log_info "Rip attempt $rip_attempt/$MAX_RETRIES"
+        log_info "Running: $handbrake_cmd"
 
-        # Run HandBrake (redirect output to log)
-        if eval "$handbrake_cmd" >> "$LOG_FILE" 2>&1; then
+        eval "$handbrake_cmd" >> "$LOG_FILE" 2>&1
+        local rc=$?
+        if [[ $rc -eq 0 ]]; then
             rip_success=true
             break
         else

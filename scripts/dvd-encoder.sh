@@ -222,8 +222,11 @@ encode_iso() {
 
     while [[ $attempt -le $MAX_RETRIES ]]; do
         log_info "[ENCODER] Encode attempt $attempt/$MAX_RETRIES"
+        log_info "[ENCODER] Running: $handbrake_cmd"
 
-        if eval "$handbrake_cmd" >> "$(get_stage_log_file)" 2>&1; then
+        eval "$handbrake_cmd" >> "$(get_stage_log_file)" 2>&1
+        local rc=$?
+        if [[ $rc -eq 0 ]]; then
             success=true
             break
         else
@@ -557,8 +560,11 @@ encode_iso_from_encoding() {
 
     while [[ $attempt -le $MAX_RETRIES ]]; do
         log_info "[ENCODER] Encode attempt $attempt/$MAX_RETRIES"
+        log_info "[ENCODER] Running: $handbrake_cmd"
 
-        if eval "$handbrake_cmd" >> "$(get_stage_log_file)" 2>&1; then
+        eval "$handbrake_cmd" >> "$(get_stage_log_file)" 2>&1
+        local rc=$?
+        if [[ $rc -eq 0 ]]; then
             success=true
             break
         else
