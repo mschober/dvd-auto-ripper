@@ -265,27 +265,10 @@ check_dependencies() {
 
     # Check for libdvdcss (needed for encrypted DVDs)
     if ! check_libdvdcss; then
-        if [[ "$INSTALL_LIBDVDCSS" == "true" ]]; then
-            install_libdvdcss || print_warn "libdvdcss installation failed - continuing anyway"
-            # Refresh library cache
-            ldconfig
-        else
-            print_warn "⚠ libdvdcss not found - encrypted DVDs will not work"
-            print_info ""
-            print_info "To rip commercial/encrypted DVDs, either:"
-            print_info "  1. Re-run with --install-libdvdcss flag:"
-            print_info "     sudo ./remote-install.sh --install-libdvdcss"
-            print_info ""
-            print_info "  2. Or install manually:"
-            print_info "     Debian/Ubuntu:"
-            print_info "       sudo apt-get install libdvd-pkg"
-            print_info "       sudo dpkg-reconfigure libdvd-pkg"
-            print_info ""
-            print_info "     RHEL/CentOS/Fedora:"
-            print_info "       # Enable RPM Fusion repository first"
-            print_info "       sudo yum install libdvdcss"
-            print_info ""
-        fi
+        print_info "libdvdcss not found - installing for encrypted DVD support..."
+        install_libdvdcss || print_warn "libdvdcss installation failed - encrypted DVDs will not work"
+        # Refresh library cache
+        ldconfig
     else
         print_info "✓ libdvdcss found - encrypted DVD support available"
     fi
