@@ -15,9 +15,9 @@ source "${SCRIPT_DIR}/dvd-utils.sh"
 CURRENT_STAGE="encoder"
 
 # Configuration (overridden by config file)
-HANDBRAKE_PRESET="${HANDBRAKE_PRESET:-Fast 1080p30}"
 HANDBRAKE_QUALITY="${HANDBRAKE_QUALITY:-20}"
-HANDBRAKE_FORMAT="${HANDBRAKE_FORMAT:-mkv}"
+HANDBRAKE_ENCODER="${HANDBRAKE_ENCODER:-x265}"
+HANDBRAKE_FORMAT="${HANDBRAKE_FORMAT:-mp4}"
 MIN_FILE_SIZE_MB="${MIN_FILE_SIZE_MB:-100}"
 
 # Preview generation settings
@@ -190,14 +190,16 @@ encode_iso() {
     log_info "[ENCODER] Starting HandBrake encode"
     log_info "[ENCODER] Input: $iso_path"
     log_info "[ENCODER] Output: $output_path"
-    log_info "[ENCODER] Preset: $HANDBRAKE_PRESET, Quality: $HANDBRAKE_QUALITY"
+    log_info "[ENCODER] Encoder: $HANDBRAKE_ENCODER, Quality: $HANDBRAKE_QUALITY"
 
     # Build HandBrake command
     # -i accepts both ISO files (ddrescue) and directories (dvdbackup)
     local handbrake_cmd="HandBrakeCLI"
     handbrake_cmd+=" -i \"$iso_path\""
     handbrake_cmd+=" -o \"$output_path\""
-    handbrake_cmd+=" --preset \"$HANDBRAKE_PRESET\""
+    handbrake_cmd+=" --format av_${HANDBRAKE_FORMAT}"
+    handbrake_cmd+=" --encoder ${HANDBRAKE_ENCODER}"
+    handbrake_cmd+=" --encoder-preset medium"
     handbrake_cmd+=" -q \"$HANDBRAKE_QUALITY\""
 
     if [[ -n "$main_title" ]]; then
@@ -205,6 +207,10 @@ encode_iso() {
     else
         handbrake_cmd+=" --main-feature"
     fi
+
+    handbrake_cmd+=" --all-audio"
+    handbrake_cmd+=" --all-subtitles"
+    handbrake_cmd+=" --optimize"
 
     if [[ -n "${HANDBRAKE_EXTRA_OPTS:-}" ]]; then
         handbrake_cmd+=" $HANDBRAKE_EXTRA_OPTS"
@@ -519,14 +525,16 @@ encode_iso_from_encoding() {
     log_info "[ENCODER] Starting HandBrake encode"
     log_info "[ENCODER] Input: $iso_path"
     log_info "[ENCODER] Output: $output_path"
-    log_info "[ENCODER] Preset: $HANDBRAKE_PRESET, Quality: $HANDBRAKE_QUALITY"
+    log_info "[ENCODER] Encoder: $HANDBRAKE_ENCODER, Quality: $HANDBRAKE_QUALITY"
 
     # Build HandBrake command
     # -i accepts both ISO files (ddrescue) and directories (dvdbackup)
     local handbrake_cmd="HandBrakeCLI"
     handbrake_cmd+=" -i \"$iso_path\""
     handbrake_cmd+=" -o \"$output_path\""
-    handbrake_cmd+=" --preset \"$HANDBRAKE_PRESET\""
+    handbrake_cmd+=" --format av_${HANDBRAKE_FORMAT}"
+    handbrake_cmd+=" --encoder ${HANDBRAKE_ENCODER}"
+    handbrake_cmd+=" --encoder-preset medium"
     handbrake_cmd+=" -q \"$HANDBRAKE_QUALITY\""
 
     if [[ -n "$main_title" ]]; then
@@ -534,6 +542,10 @@ encode_iso_from_encoding() {
     else
         handbrake_cmd+=" --main-feature"
     fi
+
+    handbrake_cmd+=" --all-audio"
+    handbrake_cmd+=" --all-subtitles"
+    handbrake_cmd+=" --optimize"
 
     if [[ -n "${HANDBRAKE_EXTRA_OPTS:-}" ]]; then
         handbrake_cmd+=" $HANDBRAKE_EXTRA_OPTS"

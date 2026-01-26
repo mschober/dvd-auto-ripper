@@ -76,15 +76,6 @@ DVD_DEVICE="/dev/sr0"
 # HandBrake Encoding Settings
 # ============================================================================
 
-# HandBrake preset to use for encoding
-# Common presets:
-#   - "Fast 1080p30" - Quick encode, good quality (recommended)
-#   - "HQ 1080p30 Surround" - Higher quality, slower
-#   - "Super HQ 1080p30 Surround" - Highest quality, very slow
-#   - "Very Fast 1080p30" - Fastest, lower quality
-# List all presets: HandBrakeCLI --preset-list
-HANDBRAKE_PRESET="Fast 1080p30"
-
 # Quality setting (lower = better quality, larger file)
 # Recommended range: 18-22
 # 18 = High quality, ~5-8GB per movie
@@ -92,10 +83,13 @@ HANDBRAKE_PRESET="Fast 1080p30"
 # 22 = Acceptable quality, ~2-3GB per movie
 HANDBRAKE_QUALITY="20"
 
+# Video encoder: "x265" (HEVC, smaller files) or "x264" (H.264, wider compatibility)
+HANDBRAKE_ENCODER="x265"
+
 # Output format: "mkv" or "mp4"
 # mkv = Matroska, more flexible, supports more formats
 # mp4 = MP4, better device compatibility
-HANDBRAKE_FORMAT="mkv"
+HANDBRAKE_FORMAT="mp4"
 
 # Minimum acceptable file size in MB
 # Used to verify rip completed successfully (not corrupted/partial)
