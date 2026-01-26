@@ -236,7 +236,7 @@ class ProgressTracker:
                 except Exception:
                     pass
 
-            # Parse ddrescue progress from this drive's log
+            # Try ddrescue format: "pct rescued: 45.6%  ...  remaining time: 5m"
             iso_matches = re.findall(
                 r'pct rescued:\s*(\d+\.?\d*)%.*?remaining time:\s*(\d+m|\d+s|n/a)',
                 drive_logs
@@ -248,13 +248,28 @@ class ProgressTracker:
                     "percent": float(last_match[0]),
                     "eta": last_match[1] if last_match[1] != "n/a" else "finishing..."
                 })
-            else:
-                # Drive is active but no progress yet (just started)
+                continue
+
+            # Try dvdbackup format: "Copying VTS_01_1.VOB: 45% done (1800/4000 MiB)"
+            dvdbackup_matches = re.findall(
+                r'Copying\s+\S+:\s*(\d+\.?\d*)%\s+done\s+\((\d+\.?\d*)/(\d+\.?\d*)\s+MiB\)',
+                drive_logs
+            )
+            if dvdbackup_matches:
+                last_match = dvdbackup_matches[-1]
                 iso_progress_list.append({
                     "drive": drive,
-                    "percent": 0.0,
-                    "eta": "starting..."
+                    "percent": float(last_match[0]),
+                    "eta": "dvdbackup"
                 })
+                continue
+
+            # Drive is active but no progress yet (just started)
+            iso_progress_list.append({
+                "drive": drive,
+                "percent": 0.0,
+                "eta": "starting..."
+            })
 
         return iso_progress_list if iso_progress_list else None
 

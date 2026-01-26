@@ -336,9 +336,10 @@ _create_iso_dvdbackup() {
 
     # Run dvdbackup to create full DVD structure
     # -M = mirror entire disc
+    # -p = show progress (e.g. "Copying VTS_01_1.VOB: 45% done (1800/4000 MiB)")
     # -n = override output directory name to match our naming convention
     # -o = parent output directory
-    if dvdbackup -M -i "$device" -n "$output_name" -o "$output_dir" >> "$(get_device_log_file)" 2>&1; then
+    if dvdbackup -M -p -i "$device" -n "$output_name" -o "$output_dir" >> "$(get_device_log_file)" 2>&1; then
         log_info "DVD backup completed successfully"
 
         if [[ -d "$output_path" ]]; then
