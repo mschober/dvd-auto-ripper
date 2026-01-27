@@ -1359,14 +1359,13 @@ transition_state() {
     echo "$new_state_file"
 }
 
-# Parse JSON field from state metadata (simple bash parsing)
+# Parse JSON field from state metadata
 # Usage: parse_json_field METADATA FIELD
 # Returns: field value or empty string
-# Note: Uses || true to handle empty values without failing under set -e
 parse_json_field() {
     local metadata="$1"
     local field="$2"
-    echo "$metadata" | grep -oP "\"$field\":\s*\"?\K[^\",$}]+" 2>/dev/null | head -1 || true
+    echo "$metadata" | jq -r ".$field // empty" 2>/dev/null || true
 }
 
 # Trigger next pipeline stage if event-driven triggers are enabled
