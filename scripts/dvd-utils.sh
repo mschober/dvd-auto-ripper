@@ -714,24 +714,37 @@ eject_disc() {
     # This handles desktop-automounted discs at /media/username/...
     if command -v udisksctl &>/dev/null; then
         log_debug "Attempting unmount via udisksctl"
-        if udisksctl unmount -b "$block_device" 2>&1 | tee -a "$(get_stage_log_file)"; then
+        local unmount_output
+        if unmount_output=$(udisksctl unmount -b "$block_device" 2>&1); then
             log_debug "udisksctl unmount successful"
         else
             # Not an error - disc might not be mounted
             log_debug "udisksctl unmount returned non-zero (disc may not be mounted)"
         fi
+        echo "$unmount_output" >> "$(get_stage_log_file)" 2>/dev/null
     fi
 
-    # Now eject - retry a few times in case device is briefly busy
-    local attempt
+    # Flush pending I/O before eject
+    sync
+
+    # Clear any software eject prevention (tray lock) set by other processes
+    # On headless servers, udisks polling can leave the tray locked
+    eject -i off "$block_device" 2>/dev/null || true
+
+    # Eject - retry a few times in case device is briefly busy
+    local attempt eject_output rc
     for attempt in 1 2 3; do
-        if eject "$block_device" 2>&1 | tee -a "$(get_stage_log_file)"; then
+        eject_output=$(eject "$block_device" 2>&1)
+        rc=$?
+        echo "$eject_output" >> "$(get_stage_log_file)" 2>/dev/null
+
+        if [[ $rc -eq 0 ]]; then
             log_info "Disc ejected successfully"
             return 0
         fi
 
+        log_debug "Eject attempt $attempt failed (rc=$rc): $eject_output"
         if [[ $attempt -lt 3 ]]; then
-            log_debug "Eject attempt $attempt failed, retrying in 2s..."
             sleep 2
         fi
     done
