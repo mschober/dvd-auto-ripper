@@ -257,10 +257,12 @@ class ProgressTracker:
             )
             if dvdbackup_matches:
                 last_match = dvdbackup_matches[-1]
+                copied_mb = int(float(last_match[1]))
+                total_mb = int(float(last_match[2]))
                 iso_progress_list.append({
                     "drive": drive,
                     "percent": float(last_match[0]),
-                    "eta": "dvdbackup"
+                    "eta": f"{copied_mb}/{total_mb} MiB"
                 })
                 continue
 
