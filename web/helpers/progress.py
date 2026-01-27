@@ -250,9 +250,9 @@ class ProgressTracker:
                 })
                 continue
 
-            # Try dvdbackup format: "Copying VTS_01_1.VOB: 45% done (1800/4000 MiB)"
+            # Try dvdbackup format: "Copying Title, part 1/2: 45% done (1800/4000 MiB)"
             dvdbackup_matches = re.findall(
-                r'Copying\s+\S+:\s*(\d+\.?\d*)%\s+done\s+\((\d+\.?\d*)/(\d+\.?\d*)\s+MiB\)',
+                r'Copying\s+[^:]+:\s*(\d+\.?\d*)%\s+done\s+\((\d+\.?\d*)/(\d+\.?\d*)\s+MiB\)',
                 drive_logs
             )
             if dvdbackup_matches:
