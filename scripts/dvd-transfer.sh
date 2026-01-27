@@ -373,14 +373,20 @@ transfer_worker() {
     local slot="$2"
     local log_file=$(get_transfer_log_file "$slot")
 
+    # Update lock file with worker PID (parent wrote its own PID during acquisition)
+    echo "$BASHPID" > "/run/dvd-ripper/transfer-${slot}.lock"
+
+    # Guarantee slot cleanup even if set -e kills the subshell
+    trap "release_transfer_slot '$slot'" EXIT
+
     # Use slot-specific log file
     export LOG_FILE_OVERRIDE="$log_file"
 
     log_info "[TRANSFER:$slot] Starting transfer for: $(basename "$state_file")"
 
-    # Transfer the video
-    transfer_video "$state_file"
-    local exit_code=$?
+    # Transfer the video (|| true prevents set -e from skipping cleanup)
+    local exit_code=0
+    transfer_video "$state_file" || exit_code=$?
 
     if [[ $exit_code -eq 0 ]]; then
         log_info "[TRANSFER:$slot] Transfer completed successfully"
@@ -388,9 +394,7 @@ transfer_worker() {
         log_error "[TRANSFER:$slot] Transfer failed"
     fi
 
-    # Release the slot
-    release_transfer_slot "$slot"
-
+    # EXIT trap handles release_transfer_slot
     return $exit_code
 }
 
