@@ -15,9 +15,9 @@ source "${SCRIPT_DIR}/dvd-utils.sh"
 CURRENT_STAGE="encoder"
 
 # Configuration (overridden by config file)
-HANDBRAKE_PRESET="${HANDBRAKE_PRESET:-Fast 1080p30}"
 HANDBRAKE_QUALITY="${HANDBRAKE_QUALITY:-20}"
-HANDBRAKE_FORMAT="${HANDBRAKE_FORMAT:-mkv}"
+HANDBRAKE_ENCODER="${HANDBRAKE_ENCODER:-x265}"
+HANDBRAKE_FORMAT="${HANDBRAKE_FORMAT:-mp4}"
 MIN_FILE_SIZE_MB="${MIN_FILE_SIZE_MB:-100}"
 
 # Preview generation settings
@@ -153,18 +153,23 @@ encode_iso() {
     main_title=$(parse_json_field "$metadata" "main_title")
     iso_path=$(parse_json_field "$metadata" "iso_path")
 
+    local rip_method
+    rip_method=$(parse_json_field "$metadata" "rip_method")
+
     log_info "[ENCODER] Title: '$sanitized_title', Year: '$year', ISO: $iso_path"
 
-    # Verify ISO exists
-    if [[ ! -f "$iso_path" ]]; then
-        log_error "[ENCODER] ISO file not found: $iso_path"
+    # Verify rip exists (file for ddrescue, directory for dvdbackup)
+    if ! verify_rip_exists "$iso_path"; then
+        log_error "[ENCODER] Rip not found: $iso_path"
         log_warn "[ENCODER] Removing orphaned state file"
         remove_state_file "$state_file"
         return 1
     fi
 
-    # Prepare CSS cache (import packaged keys or clear partial cache)
-    prepare_dvdcss_cache "$iso_path"
+    # Prepare CSS cache (only needed for ddrescue ISOs; dvdbackup handles CSS during rip)
+    if [[ "$rip_method" != "dvdbackup" ]]; then
+        prepare_dvdcss_cache "$iso_path"
+    fi
 
     # Generate Plex-friendly output filename (e.g., "The Matrix (1999).mkv")
     output_filename=$(generate_plex_filename "$sanitized_title" "$year" "$HANDBRAKE_FORMAT")
@@ -185,21 +190,28 @@ encode_iso() {
     log_info "[ENCODER] Starting HandBrake encode"
     log_info "[ENCODER] Input: $iso_path"
     log_info "[ENCODER] Output: $output_path"
-    log_info "[ENCODER] Preset: $HANDBRAKE_PRESET, Quality: $HANDBRAKE_QUALITY"
+    log_info "[ENCODER] Encoder: $HANDBRAKE_ENCODER, Quality: $HANDBRAKE_QUALITY"
 
     # Build HandBrake command
+    # -i accepts both ISO files (ddrescue) and directories (dvdbackup)
     local handbrake_cmd="HandBrakeCLI"
     handbrake_cmd+=" -i \"$iso_path\""
     handbrake_cmd+=" -o \"$output_path\""
-    handbrake_cmd+=" --preset \"$HANDBRAKE_PRESET\""
+    handbrake_cmd+=" --format av_${HANDBRAKE_FORMAT}"
+    handbrake_cmd+=" --encoder ${HANDBRAKE_ENCODER}"
+    handbrake_cmd+=" --encoder-preset medium"
     handbrake_cmd+=" -q \"$HANDBRAKE_QUALITY\""
 
-    # Add main title selection if available
     if [[ -n "$main_title" ]]; then
         handbrake_cmd+=" -t \"$main_title\""
+    else
+        handbrake_cmd+=" --main-feature"
     fi
 
-    # Add extra options if specified
+    handbrake_cmd+=" --all-audio"
+    handbrake_cmd+=" --all-subtitles"
+    handbrake_cmd+=" --optimize"
+
     if [[ -n "${HANDBRAKE_EXTRA_OPTS:-}" ]]; then
         handbrake_cmd+=" $HANDBRAKE_EXTRA_OPTS"
     fi
@@ -210,8 +222,11 @@ encode_iso() {
 
     while [[ $attempt -le $MAX_RETRIES ]]; do
         log_info "[ENCODER] Encode attempt $attempt/$MAX_RETRIES"
+        log_info "[ENCODER] Running: $handbrake_cmd"
 
-        if eval "$handbrake_cmd" >> "$(get_stage_log_file)" 2>&1; then
+        eval "$handbrake_cmd" >> "$(get_stage_log_file)" 2>&1
+        local rc=$?
+        if [[ $rc -eq 0 ]]; then
             success=true
             break
         else
@@ -269,7 +284,7 @@ encode_iso() {
 
     # Create archive-ready marker (ISO remains unchanged for archival)
     local archive_marker="${iso_path}.archive-ready"
-    if [[ -f "$iso_path" ]]; then
+    if verify_rip_exists "$iso_path"; then
         local marker_content="{\"iso_path\": \"$iso_path\", \"marked_at\": \"$(date -Iseconds)\", \"title\": \"$sanitized_title\", \"timestamp\": \"$timestamp\"}"
         if echo "$marker_content" > "$archive_marker" 2>/dev/null; then
             chmod 664 "$archive_marker" 2>/dev/null || true
@@ -477,18 +492,23 @@ encode_iso_from_encoding() {
     main_title=$(parse_json_field "$metadata" "main_title")
     iso_path=$(parse_json_field "$metadata" "iso_path")
 
+    local rip_method
+    rip_method=$(parse_json_field "$metadata" "rip_method")
+
     log_info "[ENCODER] Title: '$sanitized_title', Year: '$year', ISO: $iso_path"
 
-    # Verify ISO exists
-    if [[ ! -f "$iso_path" ]]; then
-        log_error "[ENCODER] ISO file not found: $iso_path"
+    # Verify rip exists (file for ddrescue, directory for dvdbackup)
+    if ! verify_rip_exists "$iso_path"; then
+        log_error "[ENCODER] Rip not found: $iso_path"
         log_warn "[ENCODER] Removing orphaned state file"
         remove_state_file "$state_file"
         return 1
     fi
 
-    # Prepare CSS cache (import packaged keys or clear partial cache)
-    prepare_dvdcss_cache "$iso_path"
+    # Prepare CSS cache (only needed for ddrescue ISOs; dvdbackup handles CSS during rip)
+    if [[ "$rip_method" != "dvdbackup" ]]; then
+        prepare_dvdcss_cache "$iso_path"
+    fi
 
     # Generate Plex-friendly output filename
     output_filename=$(generate_plex_filename "$sanitized_title" "$year" "$HANDBRAKE_FORMAT")
@@ -508,18 +528,27 @@ encode_iso_from_encoding() {
     log_info "[ENCODER] Starting HandBrake encode"
     log_info "[ENCODER] Input: $iso_path"
     log_info "[ENCODER] Output: $output_path"
-    log_info "[ENCODER] Preset: $HANDBRAKE_PRESET, Quality: $HANDBRAKE_QUALITY"
+    log_info "[ENCODER] Encoder: $HANDBRAKE_ENCODER, Quality: $HANDBRAKE_QUALITY"
 
     # Build HandBrake command
+    # -i accepts both ISO files (ddrescue) and directories (dvdbackup)
     local handbrake_cmd="HandBrakeCLI"
     handbrake_cmd+=" -i \"$iso_path\""
     handbrake_cmd+=" -o \"$output_path\""
-    handbrake_cmd+=" --preset \"$HANDBRAKE_PRESET\""
+    handbrake_cmd+=" --format av_${HANDBRAKE_FORMAT}"
+    handbrake_cmd+=" --encoder ${HANDBRAKE_ENCODER}"
+    handbrake_cmd+=" --encoder-preset medium"
     handbrake_cmd+=" -q \"$HANDBRAKE_QUALITY\""
 
     if [[ -n "$main_title" ]]; then
         handbrake_cmd+=" -t \"$main_title\""
+    else
+        handbrake_cmd+=" --main-feature"
     fi
+
+    handbrake_cmd+=" --all-audio"
+    handbrake_cmd+=" --all-subtitles"
+    handbrake_cmd+=" --optimize"
 
     if [[ -n "${HANDBRAKE_EXTRA_OPTS:-}" ]]; then
         handbrake_cmd+=" $HANDBRAKE_EXTRA_OPTS"
@@ -531,8 +560,11 @@ encode_iso_from_encoding() {
 
     while [[ $attempt -le $MAX_RETRIES ]]; do
         log_info "[ENCODER] Encode attempt $attempt/$MAX_RETRIES"
+        log_info "[ENCODER] Running: $handbrake_cmd"
 
-        if eval "$handbrake_cmd" >> "$(get_stage_log_file)" 2>&1; then
+        eval "$handbrake_cmd" >> "$(get_stage_log_file)" 2>&1
+        local rc=$?
+        if [[ $rc -eq 0 ]]; then
             success=true
             break
         else
@@ -582,7 +614,7 @@ encode_iso_from_encoding() {
 
     # Create archive-ready marker (ISO remains unchanged for archival)
     local archive_marker="${iso_path}.archive-ready"
-    if [[ -f "$iso_path" ]]; then
+    if verify_rip_exists "$iso_path"; then
         local marker_content="{\"iso_path\": \"$iso_path\", \"marked_at\": \"$(date -Iseconds)\", \"title\": \"$sanitized_title\", \"timestamp\": \"$timestamp\"}"
         if echo "$marker_content" > "$archive_marker" 2>/dev/null; then
             chmod 664 "$archive_marker" 2>/dev/null || true

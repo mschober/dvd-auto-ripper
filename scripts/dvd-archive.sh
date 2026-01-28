@@ -37,6 +37,12 @@ ARCHIVE_LOCK_FILE="${ARCHIVE_LOCK_FILE:-/run/dvd-ripper/archive.lock}"
 archive_iso() {
     local iso_path="$1"
 
+    # Skip archival for dvdbackup directories (archival only applies to ISO files)
+    if [[ -d "$iso_path" ]]; then
+        log_info "[ARCHIVE] Skipping directory (dvdbackup rip, not an ISO file): $iso_path"
+        return 0
+    fi
+
     log_info "[ARCHIVE] Processing: $iso_path"
 
     # Handle both new marker files and legacy .iso.deletable files

@@ -130,10 +130,10 @@ return_remote_job() {
     rm -f "$mkv_path"
     log_debug "[TRANSFER] Removed local MKV: $mkv_path"
 
-    # Clean up ISO if it exists locally
-    if [[ -f "$iso_path" ]]; then
-        rm -f "$iso_path"
-        log_debug "[TRANSFER] Removed local ISO: $iso_path"
+    # Clean up rip if it exists locally (ISO file or dvdbackup directory)
+    if verify_rip_exists "$iso_path"; then
+        remove_rip "$iso_path"
+        log_debug "[TRANSFER] Removed local rip: $iso_path"
     fi
     # Remove archive-ready marker if it exists
     if [[ -f "${iso_path}.archive-ready" ]]; then
@@ -285,10 +285,10 @@ transfer_video() {
         # Cleanup ISO if configured and archival is disabled
         # When archival is enabled, the archive process handles ISO deletion
         if [[ "$CLEANUP_ISO_AFTER_TRANSFER" == "1" ]] && [[ "${ENABLE_ISO_ARCHIVAL:-0}" != "1" ]]; then
-            # Delete the ISO file
-            if [[ -f "$iso_path" ]]; then
-                log_info "[TRANSFER] Removing ISO: $iso_path"
-                rm -f "$iso_path"
+            # Delete the rip (ISO file or dvdbackup directory)
+            if verify_rip_exists "$iso_path"; then
+                log_info "[TRANSFER] Removing rip: $iso_path"
+                remove_rip "$iso_path"
             fi
             # Also remove the archive-ready marker if it exists
             local archive_marker="${iso_path}.archive-ready"
@@ -373,14 +373,20 @@ transfer_worker() {
     local slot="$2"
     local log_file=$(get_transfer_log_file "$slot")
 
+    # Update lock file with worker PID (parent wrote its own PID during acquisition)
+    echo "$BASHPID" > "/run/dvd-ripper/transfer-${slot}.lock"
+
+    # Guarantee slot cleanup even if set -e kills the subshell
+    trap "release_transfer_slot '$slot'" EXIT
+
     # Use slot-specific log file
     export LOG_FILE_OVERRIDE="$log_file"
 
     log_info "[TRANSFER:$slot] Starting transfer for: $(basename "$state_file")"
 
-    # Transfer the video
-    transfer_video "$state_file"
-    local exit_code=$?
+    # Transfer the video (|| true prevents set -e from skipping cleanup)
+    local exit_code=0
+    transfer_video "$state_file" || exit_code=$?
 
     if [[ $exit_code -eq 0 ]]; then
         log_info "[TRANSFER:$slot] Transfer completed successfully"
@@ -388,9 +394,7 @@ transfer_worker() {
         log_error "[TRANSFER:$slot] Transfer failed"
     fi
 
-    # Release the slot
-    release_transfer_slot "$slot"
-
+    # EXIT trap handles release_transfer_slot
     return $exit_code
 }
 

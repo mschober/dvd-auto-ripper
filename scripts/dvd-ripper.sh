@@ -14,9 +14,9 @@ source "${SCRIPT_DIR}/dvd-utils.sh"
 DVD_DEVICE="${DVD_DEVICE:-/dev/sr0}"
 CREATE_ISO="${CREATE_ISO:-1}"
 ENCODE_VIDEO="${ENCODE_VIDEO:-0}"
-HANDBRAKE_PRESET="${HANDBRAKE_PRESET:-Fast 1080p30}"
 HANDBRAKE_QUALITY="${HANDBRAKE_QUALITY:-20}"
-HANDBRAKE_FORMAT="${HANDBRAKE_FORMAT:-mkv}"
+HANDBRAKE_ENCODER="${HANDBRAKE_ENCODER:-x265}"
+HANDBRAKE_FORMAT="${HANDBRAKE_FORMAT:-mp4}"
 MIN_FILE_SIZE_MB="${MIN_FILE_SIZE_MB:-100}"
 NAS_ENABLED="${NAS_ENABLED:-0}"
 # HANDBRAKE_EXTRA_OPTS="${HANDBRAKE_EXTRA_OPTS:---encoder-preset veryfast --vfr --no-dvdnav}"
@@ -106,20 +106,27 @@ rip_dvd() {
     state_file_ripping=$(create_state_file "encoding" "$sanitized_title" "$timestamp")
 
     # Execute HandBrake encode
-    log_info "Starting HandBrake encode (preset: $HANDBRAKE_PRESET, quality: $HANDBRAKE_QUALITY)"
+    log_info "Starting HandBrake encode (encoder: $HANDBRAKE_ENCODER, quality: $HANDBRAKE_QUALITY)"
     log_info "Input source: $input_source"
 
     local handbrake_cmd="HandBrakeCLI"
     handbrake_cmd+=" -i \"$input_source\""
     handbrake_cmd+=" -o \"$output_path\""
-    handbrake_cmd+=" --preset \"$HANDBRAKE_PRESET\""
+    handbrake_cmd+=" --format av_${HANDBRAKE_FORMAT}"
+    handbrake_cmd+=" --encoder ${HANDBRAKE_ENCODER}"
+    handbrake_cmd+=" --encoder-preset medium"
     handbrake_cmd+=" -q \"$HANDBRAKE_QUALITY\""
-
 
     # Add main title selection if available
     if [[ -n "$main_title" ]]; then
         handbrake_cmd+=" -t \"$main_title\""
+    else
+        handbrake_cmd+=" --main-feature"
     fi
+
+    handbrake_cmd+=" --all-audio"
+    handbrake_cmd+=" --all-subtitles"
+    handbrake_cmd+=" --optimize"
 
     # Add extra options if specified
     if [[ -n "${HANDBRAKE_EXTRA_OPTS:-}" ]]; then
@@ -132,9 +139,11 @@ rip_dvd() {
 
     while [[ $rip_attempt -le $MAX_RETRIES ]]; do
         log_info "Rip attempt $rip_attempt/$MAX_RETRIES"
+        log_info "Running: $handbrake_cmd"
 
-        # Run HandBrake (redirect output to log)
-        if eval "$handbrake_cmd" >> "$LOG_FILE" 2>&1; then
+        eval "$handbrake_cmd" >> "$LOG_FILE" 2>&1
+        local rc=$?
+        if [[ $rc -eq 0 ]]; then
             rip_success=true
             break
         else

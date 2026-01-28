@@ -1,6 +1,6 @@
 #!/bin/bash
 # DVD ISO Creator - Stage 1 of Pipeline
-# Creates ISO from DVD using ddrescue, then ejects disc immediately
+# Creates disc backup from DVD (ddrescue ISO or dvdbackup directory), then ejects disc
 # Encoding happens later via dvd-encoder.sh (cron job)
 
 set -euo pipefail
@@ -53,7 +53,11 @@ create_dvd_iso() {
     # Generate paths
     local timestamp=$(date +%s)
     local sanitized_title=$(sanitize_filename "$title")
-    iso_path="${STAGING_DIR}/${sanitized_title}-${timestamp}.iso"
+    if [[ "$RIP_METHOD" == "dvdbackup" ]]; then
+        iso_path="${STAGING_DIR}/${sanitized_title}-${timestamp}"
+    else
+        iso_path="${STAGING_DIR}/${sanitized_title}-${timestamp}.iso"
+    fi
 
     # Build metadata for state file
     local metadata=$(build_state_metadata "$sanitized_title" "$year" "$timestamp" "$main_title" "$iso_path")
@@ -67,10 +71,10 @@ create_dvd_iso() {
     if create_iso "$device" "$iso_path"; then
         log_info "[ISO] ISO created successfully: $iso_path"
 
-        # Verify ISO size
-        local iso_size=$(stat -c%s "$iso_path" 2>/dev/null || echo "0")
+        # Verify rip size
+        local iso_size=$(get_rip_size "$iso_path")
         local iso_size_mb=$((iso_size / 1024 / 1024))
-        log_info "[ISO] ISO size: ${iso_size_mb}MB"
+        log_info "[ISO] Rip size: ${iso_size_mb}MB"
 
         # Transition state: creating -> ready
         remove_state_file "$state_file_creating"
@@ -82,11 +86,14 @@ create_dvd_iso() {
         trigger_next_stage "iso-ready"
 
         # Package CSS keys for cluster distribution (must be before eject)
-        local volume_label=$(blkid -o value -s LABEL "$device" 2>/dev/null)
-        if [[ -n "$volume_label" ]] && package_dvdcss_keys "$iso_path" "$volume_label"; then
-            log_info "[ISO] CSS keys packaged with ISO"
-        else
-            log_warn "[ISO] Could not package CSS keys (encoding may need to crack keys)"
+        # Only needed for ddrescue ISOs; dvdbackup handles CSS via libdvdcss during rip
+        if [[ "$RIP_METHOD" == "ddrescue" ]]; then
+            local volume_label=$(blkid -o value -s LABEL "$device" 2>/dev/null)
+            if [[ -n "$volume_label" ]] && package_dvdcss_keys "$iso_path" "$volume_label"; then
+                log_info "[ISO] CSS keys packaged with ISO"
+            else
+                log_warn "[ISO] Could not package CSS keys (encoding may need to crack keys)"
+            fi
         fi
 
         # Eject disc immediately - drive is now free for next disc
@@ -98,7 +105,10 @@ create_dvd_iso() {
         log_error "[ISO] ISO creation failed"
 
         # Cleanup
-        cleanup_files "$iso_path" "${iso_path}.mapfile"
+        remove_rip "$iso_path"
+        if [[ "$RIP_METHOD" == "ddrescue" ]]; then
+            rm -f "${iso_path}.mapfile"
+        fi
         remove_state_file "$state_file_creating"
 
         eject_disc "$device"
@@ -131,9 +141,10 @@ check_iso_recovery() {
             local metadata=$(read_pipeline_state "$state_file")
             local iso_path=$(parse_json_field "$metadata" "iso_path")
 
-            # Remove partial ISO and mapfile
+            # Remove partial rip and mapfile
             if [[ -n "$iso_path" ]]; then
-                cleanup_files "$iso_path" "${iso_path}.mapfile"
+                remove_rip "$iso_path"
+                rm -f "${iso_path}.mapfile"
             fi
 
             remove_state_file "$state_file"

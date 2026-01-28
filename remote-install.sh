@@ -188,7 +188,7 @@ check_dependencies() {
     print_info "Checking dependencies..."
 
     # Required dependencies (command -> package name mapping for auto-install)
-    local deps=("HandBrakeCLI" "rsync" "ssh" "eject" "ffmpeg" "ddrescue" "python3" "curl" "jq" "xz" "par2")
+    local deps=("HandBrakeCLI" "rsync" "ssh" "eject" "ffmpeg" "ddrescue" "dvdbackup" "python3" "curl" "jq" "xz" "par2")
 
     for cmd in "${deps[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
@@ -255,37 +255,20 @@ check_dependencies() {
         print_info ""
         print_info "Install them with:"
         print_info "  Debian/Ubuntu:"
-        print_info "    sudo apt-get install handbrake-cli rsync openssh-client eject ffmpeg gddrescue curl jq xz-utils par2"
+        print_info "    sudo apt-get install handbrake-cli rsync openssh-client eject ffmpeg gddrescue dvdbackup curl jq xz-utils par2"
         print_info ""
         print_info "  RHEL/CentOS/Fedora:"
-        print_info "    sudo yum install handbrake-cli rsync openssh-clients eject ffmpeg ddrescue curl jq xz par2cmdline"
+        print_info "    sudo yum install handbrake-cli rsync openssh-clients eject ffmpeg ddrescue dvdbackup curl jq xz par2cmdline"
         print_info ""
         exit 1
     fi
 
     # Check for libdvdcss (needed for encrypted DVDs)
     if ! check_libdvdcss; then
-        if [[ "$INSTALL_LIBDVDCSS" == "true" ]]; then
-            install_libdvdcss || print_warn "libdvdcss installation failed - continuing anyway"
-            # Refresh library cache
-            ldconfig
-        else
-            print_warn "⚠ libdvdcss not found - encrypted DVDs will not work"
-            print_info ""
-            print_info "To rip commercial/encrypted DVDs, either:"
-            print_info "  1. Re-run with --install-libdvdcss flag:"
-            print_info "     sudo ./remote-install.sh --install-libdvdcss"
-            print_info ""
-            print_info "  2. Or install manually:"
-            print_info "     Debian/Ubuntu:"
-            print_info "       sudo apt-get install libdvd-pkg"
-            print_info "       sudo dpkg-reconfigure libdvd-pkg"
-            print_info ""
-            print_info "     RHEL/CentOS/Fedora:"
-            print_info "       # Enable RPM Fusion repository first"
-            print_info "       sudo yum install libdvdcss"
-            print_info ""
-        fi
+        print_info "libdvdcss not found - installing for encrypted DVD support..."
+        install_libdvdcss || print_warn "libdvdcss installation failed - encrypted DVDs will not work"
+        # Refresh library cache
+        ldconfig
     else
         print_info "✓ libdvdcss found - encrypted DVD support available"
     fi

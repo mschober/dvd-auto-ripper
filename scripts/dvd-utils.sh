@@ -15,6 +15,7 @@ LOCK_FILE="${LOCK_FILE:-/run/dvd-ripper/dvd-ripper.pid}"
 MAX_RETRIES="${MAX_RETRIES:-3}"
 RETRY_DELAY="${RETRY_DELAY:-60}"
 DISK_USAGE_THRESHOLD="${DISK_USAGE_THRESHOLD:-80}"
+RIP_METHOD="${RIP_METHOD:-ddrescue}"
 
 # Per-stage logging configuration
 LOG_DIR="${LOG_DIR:-/var/log/dvd-ripper}"
@@ -259,17 +260,38 @@ is_dvd_readable() {
     return 0
 }
 
-# Create ISO image from DVD using ddrescue
-# Usage: create_iso DEVICE OUTPUT_ISO
+# Create disc backup from DVD
+# Usage: create_iso DEVICE OUTPUT_PATH
 # Returns: 0 on success, 1 on failure
+# RIP_METHOD controls the approach:
+#   ddrescue  = creates .iso file (OUTPUT_PATH should end in .iso)
+#   dvdbackup = creates directory (OUTPUT_PATH is the directory path)
 create_iso() {
+    local device="$1"
+    local output_path="$2"
+
+    log_info "Creating disc backup from $device (method: $RIP_METHOD)"
+
+    case "$RIP_METHOD" in
+        ddrescue)
+            _create_iso_ddrescue "$device" "$output_path"
+            ;;
+        dvdbackup)
+            _create_iso_dvdbackup "$device" "$output_path"
+            ;;
+        *)
+            log_error "Unknown RIP_METHOD: $RIP_METHOD"
+            return 1
+            ;;
+    esac
+}
+
+# Internal: Create ISO using ddrescue (error recovery, .iso file output)
+_create_iso_ddrescue() {
     local device="$1"
     local output_iso="$2"
     local mapfile="${output_iso}.mapfile"
 
-    log_info "Creating ISO from $device to $output_iso"
-
-    # Check if ddrescue is available
     if ! command -v ddrescue &>/dev/null; then
         log_error "ddrescue not found. Install with: sudo apt-get install gddrescue"
         return 1
@@ -278,10 +300,18 @@ create_iso() {
     # Run ddrescue with error recovery
     # -n = no scraping (faster initial pass)
     # -b 2048 = DVD sector size
-    if ddrescue -n -b 2048 "$device" "$output_iso" "$mapfile" >> "$(get_device_log_file)" 2>&1; then
+    local ddrescue_cmd="ddrescue"
+    ddrescue_cmd+=" -n -b 2048"
+    ddrescue_cmd+=" \"$device\""
+    ddrescue_cmd+=" \"$output_iso\""
+    ddrescue_cmd+=" \"$mapfile\""
+
+    log_info "Running: $ddrescue_cmd"
+    eval "$ddrescue_cmd" >> "$(get_device_log_file)" 2>&1
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then
         log_info "ISO creation completed successfully"
 
-        # Verify ISO file exists and has reasonable size
         if [[ -f "$output_iso" ]]; then
             local iso_size=$(stat -c%s "$output_iso" 2>/dev/null || echo "0")
             local iso_size_mb=$((iso_size / 1024 / 1024))
@@ -295,6 +325,55 @@ create_iso() {
         return 0
     else
         log_error "ISO creation failed"
+        return 1
+    fi
+}
+
+# Internal: Create DVD backup using dvdbackup (directory output)
+_create_iso_dvdbackup() {
+    local device="$1"
+    local output_path="$2"
+    local output_dir
+    output_dir="$(dirname "$output_path")"
+    local output_name
+    output_name="$(basename "$output_path")"
+
+    if ! command -v dvdbackup &>/dev/null; then
+        log_error "dvdbackup not found. Install with: sudo apt-get install dvdbackup"
+        return 1
+    fi
+
+    # Run dvdbackup to create full DVD structure
+    # -M = mirror entire disc
+    # -p = show progress (e.g. "Copying VTS_01_1.VOB: 45% done (1800/4000 MiB)")
+    # -n = override output directory name to match our naming convention
+    # -o = parent output directory
+    local dvdbackup_cmd="dvdbackup"
+    dvdbackup_cmd+=" -M -p"
+    dvdbackup_cmd+=" -i \"$device\""
+    dvdbackup_cmd+=" -n \"$output_name\""
+    dvdbackup_cmd+=" -o \"$output_dir\""
+
+    log_info "Running: $dvdbackup_cmd"
+    eval "$dvdbackup_cmd" >> "$(get_device_log_file)" 2>&1
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then
+        log_info "DVD backup completed successfully"
+
+        if [[ -d "$output_path" ]]; then
+            local dir_size
+            dir_size=$(du -sb "$output_path" 2>/dev/null | cut -f1)
+            local dir_size_mb=$((dir_size / 1024 / 1024))
+            log_info "DVD backup size: ${dir_size_mb}MB"
+
+            if [[ $dir_size_mb -lt 100 ]]; then
+                log_warn "DVD backup seems too small (${dir_size_mb}MB), may be incomplete"
+            fi
+        fi
+
+        return 0
+    else
+        log_error "DVD backup failed"
         return 1
     fi
 }
@@ -510,6 +589,41 @@ verify_file_size() {
     return 0
 }
 
+# Verify a rip (file or directory) exists
+# Usage: verify_rip_exists PATH
+# Returns: 0 if exists, 1 if not
+verify_rip_exists() {
+    local path="$1"
+    [[ -e "$path" ]]
+}
+
+# Get size of a rip in bytes (handles both files and directories)
+# Usage: get_rip_size PATH
+# Returns: size in bytes on stdout
+get_rip_size() {
+    local path="$1"
+    if [[ -f "$path" ]]; then
+        stat -c%s "$path" 2>/dev/null || echo "0"
+    elif [[ -d "$path" ]]; then
+        du -sb "$path" 2>/dev/null | cut -f1 || echo "0"
+    else
+        echo "0"
+    fi
+}
+
+# Remove a rip (handles both files and directories)
+# Usage: remove_rip PATH
+remove_rip() {
+    local path="$1"
+    if [[ -d "$path" ]]; then
+        log_info "Removing directory: $path"
+        rm -rf "$path"
+    elif [[ -f "$path" ]]; then
+        log_info "Removing file: $path"
+        rm -f "$path"
+    fi
+}
+
 # Transfer file to NAS
 # Usage: transfer_to_nas LOCAL_FILE
 transfer_to_nas() {
@@ -600,24 +714,37 @@ eject_disc() {
     # This handles desktop-automounted discs at /media/username/...
     if command -v udisksctl &>/dev/null; then
         log_debug "Attempting unmount via udisksctl"
-        if udisksctl unmount -b "$block_device" 2>&1 | tee -a "$(get_stage_log_file)"; then
+        local unmount_output
+        if unmount_output=$(udisksctl unmount -b "$block_device" 2>&1); then
             log_debug "udisksctl unmount successful"
         else
             # Not an error - disc might not be mounted
             log_debug "udisksctl unmount returned non-zero (disc may not be mounted)"
         fi
+        echo "$unmount_output" >> "$(get_stage_log_file)" 2>/dev/null
     fi
 
-    # Now eject - retry a few times in case device is briefly busy
-    local attempt
+    # Flush pending I/O before eject
+    sync
+
+    # Clear any software eject prevention (tray lock) set by other processes
+    # On headless servers, udisks polling can leave the tray locked
+    eject -i off "$block_device" 2>/dev/null || true
+
+    # Eject - retry a few times in case device is briefly busy
+    local attempt eject_output rc
     for attempt in 1 2 3; do
-        if eject "$block_device" 2>&1 | tee -a "$(get_stage_log_file)"; then
+        eject_output=$(eject "$block_device" 2>&1)
+        rc=$?
+        echo "$eject_output" >> "$(get_stage_log_file)" 2>/dev/null
+
+        if [[ $rc -eq 0 ]]; then
             log_info "Disc ejected successfully"
             return 0
         fi
 
+        log_debug "Eject attempt $attempt failed (rc=$rc): $eject_output"
         if [[ $attempt -lt 3 ]]; then
-            log_debug "Eject attempt $attempt failed, retrying in 2s..."
             sleep 2
         fi
     done
@@ -1245,14 +1372,13 @@ transition_state() {
     echo "$new_state_file"
 }
 
-# Parse JSON field from state metadata (simple bash parsing)
+# Parse JSON field from state metadata
 # Usage: parse_json_field METADATA FIELD
 # Returns: field value or empty string
-# Note: Uses || true to handle empty values without failing under set -e
 parse_json_field() {
     local metadata="$1"
     local field="$2"
-    echo "$metadata" | grep -oP "\"$field\":\s*\"?\K[^\",$}]+" 2>/dev/null | head -1 || true
+    echo "$metadata" | jq -r ".$field // empty" 2>/dev/null || true
 }
 
 # Trigger next pipeline stage if event-driven triggers are enabled
@@ -1415,9 +1541,9 @@ distribute_to_peer() {
 
     log_info "[CLUSTER] Distributing '$title' to peer $peer_name"
 
-    # Verify ISO exists
-    if [[ ! -f "$iso_path" ]]; then
-        log_error "[CLUSTER] ISO file not found: $iso_path"
+    # Verify rip exists (ISO file or dvdbackup directory)
+    if ! verify_rip_exists "$iso_path"; then
+        log_error "[CLUSTER] Rip not found: $iso_path"
         return 1
     fi
 
@@ -1528,6 +1654,7 @@ build_state_metadata() {
   "mkv_path": "$mkv_path",
   "preview_path": "$preview_path",
   "nas_path": "$nas_path",
+  "rip_method": "$RIP_METHOD",
   "needs_identification": $needs_id,
   "created_at": "$created_at"
 }
@@ -1683,9 +1810,9 @@ find_archivable_isos() {
         # Read ISO path from marker file metadata
         local iso_path=$(parse_json_field "$(cat "$marker_file" 2>/dev/null)" "iso_path")
 
-        # Verify ISO still exists
-        if [[ -z "$iso_path" ]] || [[ ! -f "$iso_path" ]]; then
-            log_warn "ISO missing for marker: $marker_file"
+        # Verify rip still exists (file for ddrescue, directory for dvdbackup)
+        if [[ -z "$iso_path" ]] || ! verify_rip_exists "$iso_path"; then
+            log_warn "Rip missing for marker: $marker_file"
             continue
         fi
 

@@ -19,12 +19,12 @@ CONFIG_SECTIONS = [
     {
         "id": "pipeline",
         "title": "Pipeline Mode",
-        "keys": ["PIPELINE_MODE", "CREATE_ISO", "ENCODE_VIDEO"]
+        "keys": ["PIPELINE_MODE", "CREATE_ISO", "ENCODE_VIDEO", "RIP_METHOD"]
     },
     {
         "id": "handbrake",
         "title": "HandBrake Encoding",
-        "keys": ["HANDBRAKE_PRESET", "HANDBRAKE_QUALITY", "HANDBRAKE_FORMAT", "HANDBRAKE_EXTRA_OPTS", "MIN_FILE_SIZE_MB"]
+        "keys": ["HANDBRAKE_QUALITY", "HANDBRAKE_ENCODER", "HANDBRAKE_FORMAT", "HANDBRAKE_EXTRA_OPTS", "MIN_FILE_SIZE_MB"]
     },
     {
         "id": "parallel",
@@ -75,7 +75,9 @@ DROPDOWN_SETTINGS = {
     "LOG_LEVEL": ["DEBUG", "INFO", "WARN", "ERROR"],
     "NAS_TRANSFER_METHOD": ["rsync", "scp"],
     "TRANSFER_MODE": ["remote", "local"],
-    "HANDBRAKE_FORMAT": ["mkv", "mp4"]
+    "HANDBRAKE_ENCODER": ["x265", "x264"],
+    "HANDBRAKE_FORMAT": ["mkv", "mp4"],
+    "RIP_METHOD": ["ddrescue", "dvdbackup"]
 }
 
 
