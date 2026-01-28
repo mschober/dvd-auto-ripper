@@ -8,5 +8,9 @@
 #   Stage 3: dvd-transfer.sh runs via timer (every 15 min)
 #
 # ID_CDROM_MEDIA=1 ensures we only trigger on insert, not eject
+#
+# UDISKS_IGNORE prevents udisks2 from polling optical drives, which causes
+# the kernel to auto-close the tray after eject on headless servers
 
+KERNEL=="sr[0-9]*", SUBSYSTEM=="block", ENV{ID_CDROM}=="1", ENV{UDISKS_IGNORE}="1"
 KERNEL=="sr[0-9]*", SUBSYSTEM=="block", ENV{ID_CDROM}=="1", ACTION=="change", ENV{ID_CDROM_MEDIA}=="1", RUN+="/usr/bin/systemctl start --no-block dvd-iso@%k.service"
