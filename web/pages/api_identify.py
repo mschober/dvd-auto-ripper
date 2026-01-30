@@ -83,3 +83,21 @@ def api_serve_preview(filename):
         return jsonify({"error": "Preview not found"}), 404
 
     return send_file(preview_path, mimetype='video/mp4')
+
+
+@api_identify_bp.route("/api/preview/<filename>", methods=["DELETE"])
+def api_delete_preview(filename):
+    """API: Delete a preview video file."""
+    # Security: only allow .preview.mp4 files
+    if not filename.endswith('.preview.mp4'):
+        return jsonify({"error": "Invalid preview file"}), 400
+
+    preview_path = os.path.join(STAGING_DIR, filename)
+    if not os.path.exists(preview_path):
+        return jsonify({"error": "Preview not found"}), 404
+
+    try:
+        os.remove(preview_path)
+        return jsonify({"status": "deleted"})
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500

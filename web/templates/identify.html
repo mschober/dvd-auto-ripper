@@ -13,11 +13,30 @@
         gap: 20px;
     }
     .identify-card {
+        position: relative;
         background: white;
         border-radius: 8px;
         padding: 16px;
         box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     }
+    .btn-dismiss-card {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        z-index: 10;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        border: none;
+        background: #e5e7eb;
+        color: #374151;
+        font-size: 16px;
+        line-height: 28px;
+        text-align: center;
+        cursor: pointer;
+        padding: 0;
+    }
+    .btn-dismiss-card:hover { background: #d1d5db; }
     .preview-container {
         position: relative;
         background: #000;
@@ -168,6 +187,7 @@
 <div class="identify-grid">
     {% for item in pending %}
     <div class="identify-card" data-state-file="{{ item.state_file }}">
+        <button class="btn-dismiss-card" onclick="dismissPreview(this)" title="Dismiss">&times;</button>
         <div class="success-msg"></div>
         <div class="error-msg"></div>
 

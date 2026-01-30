@@ -59,6 +59,38 @@ async function handleRename(form, event) {
     return false;
 }
 
+async function dismissPreview(btn) {
+    const card = btn.closest('.identify-card');
+    if (!confirm('Are you sure? This will delete the preview from the server.')) {
+        return;
+    }
+
+    // Extract preview filename from video source
+    const source = card.querySelector('video source');
+    if (source) {
+        const src = source.getAttribute('src');
+        const filename = src.split('/').pop();
+        try {
+            await fetch('/api/preview/' + encodeURIComponent(filename), {
+                method: 'DELETE'
+            });
+        } catch (e) {
+            // Continue with card removal even if delete fails
+        }
+    }
+
+    // Fade out and remove card
+    card.style.transition = 'opacity 0.3s';
+    card.style.opacity = '0';
+    card.style.pointerEvents = 'none';
+    setTimeout(() => {
+        card.remove();
+        if (document.querySelectorAll('.identify-card').length === 0) {
+            location.reload();
+        }
+    }, 300);
+}
+
 async function dismissAuditFlag(title, btn) {
     btn.disabled = true;
     btn.textContent = 'Dismissing...';
