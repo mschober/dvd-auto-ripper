@@ -1,4 +1,5 @@
 """Identification API routes for the DVD ripper dashboard."""
+import json
 import logging
 import os
 import re
@@ -126,4 +127,44 @@ def api_delete_preview(filename):
         return jsonify({"status": "deleted"})
     except OSError as e:
         logger.error("Failed to delete preview %s: %s", filename, e)
+        return jsonify({"error": str(e)}), 500
+
+
+@api_identify_bp.route("/api/identify/<path:state_file>/dismiss", methods=["POST"])
+def api_identify_dismiss(state_file):
+    """API: Dismiss an item from the identify page.
+
+    Clears needs_identification and removes the preview file so the
+    item no longer appears on the identify page.
+    """
+    full_path = os.path.join(STAGING_DIR, state_file)
+    if not os.path.exists(full_path):
+        return jsonify({"error": "Item not found"}), 404
+
+    try:
+        with open(full_path, 'r') as f:
+            metadata = json.load(f)
+    except (json.JSONDecodeError, IOError) as e:
+        return jsonify({"error": str(e)}), 500
+
+    # Delete preview file if it exists
+    preview_path = metadata.get('preview_path', '').strip()
+    if preview_path and os.path.isfile(preview_path):
+        try:
+            os.remove(preview_path)
+            logger.info("Deleted preview: %s", os.path.basename(preview_path))
+        except OSError as e:
+            logger.error("Failed to delete preview %s: %s", preview_path, e)
+            return jsonify({"error": f"Could not delete preview: {e}"}), 500
+
+    # Clear identification flag and preview path
+    metadata['needs_identification'] = False
+    metadata['preview_path'] = ''
+    try:
+        with open(full_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        logger.info("Dismissed: %s", state_file)
+        return jsonify({"status": "dismissed"})
+    except IOError as e:
+        logger.error("Failed to update state file %s: %s", state_file, e)
         return jsonify({"error": str(e)}), 500

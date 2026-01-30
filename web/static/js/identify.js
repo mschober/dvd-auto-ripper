@@ -183,29 +183,20 @@ async function handleRename(form, event) {
 
 async function dismissPreview(btn) {
     const card = btn.closest('.identify-card');
+    const stateFile = card.dataset.stateFile;
     const errorMsg = card.querySelector('.error-msg');
-    if (!confirm('Are you sure? This will delete the preview from the server.')) {
+    if (!confirm('Are you sure? This will dismiss the item and delete its preview from the server.')) {
         return;
     }
 
-    // Extract preview filename from video source
-    const source = card.querySelector('video source');
-    if (!source) {
-        errorMsg.textContent = 'No preview file to delete';
-        errorMsg.style.display = 'block';
-        return;
-    }
-
-    const src = source.getAttribute('src');
-    const filename = decodeURIComponent(src.split('/').pop());
     try {
-        const response = await fetch('/api/preview/' + encodeURIComponent(filename), {
-            method: 'DELETE'
+        const response = await fetch('/api/identify/' + encodeURIComponent(stateFile) + '/dismiss', {
+            method: 'POST'
         });
         const result = await response.json();
 
         if (!response.ok) {
-            errorMsg.textContent = 'Delete failed: ' + (result.error || 'Unknown error');
+            errorMsg.textContent = 'Dismiss failed: ' + (result.error || 'Unknown error');
             errorMsg.style.display = 'block';
             return;
         }

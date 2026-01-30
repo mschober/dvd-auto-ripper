@@ -71,10 +71,14 @@ class Identifier:
 
     @staticmethod
     def get_pending_identification():
-        """Get items that need identification (generic names in renameable states).
+        """Get items that need identification or year in renameable states.
+
+        Shows any item that has a preview file and is missing a valid
+        4-digit year, plus any item explicitly flagged via
+        needs_identification.
 
         Returns:
-            list: Items needing identification sorted by modification time.
+            list: Items needing attention sorted by modification time.
         """
         pending = []
         for state in RENAMEABLE_STATES:
@@ -87,10 +91,14 @@ class Identifier:
                     continue
 
                 title = metadata.get('title', '')
-                # Check explicit flag first, fall back to pattern matching
-                needs_id = metadata.get('needs_identification', Identifier.is_generic_title(title))
+                year = metadata.get('year', '').strip()
+                has_year = bool(re.match(r'^\d{4}$', year))
+                preview_path = metadata.get('preview_path', '').strip()
+                has_preview = bool(preview_path) and os.path.isfile(preview_path)
 
-                if needs_id:
+                needs_id = metadata.get('needs_identification', Identifier.is_generic_title(title))
+                # Show if explicitly flagged, or has a preview but missing a year
+                if needs_id or (has_preview and not has_year):
                     pending.append({
                         "state_file": os.path.basename(state_file),
                         "state": state,
