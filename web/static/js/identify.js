@@ -11,7 +11,8 @@ function buildIdentifyCard(item) {
     const meta = item.metadata;
     const rawPreview = (meta.preview_path || '').trim();
     const previewFile = rawPreview ? rawPreview.split('/').pop() : '';
-    const displayTitle = (meta.title || '').replace(/_/g, ' ');
+    const displayTitle = (meta.title || '').replace(/_/g, ' ')
+        .replace(/\w\S*/g, w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
     const yearDisplay = meta.year ? ' (' + meta.year + ')' : '';
 
     let previewHtml;
