@@ -152,11 +152,11 @@ class Identifier:
         Returns:
             dict: NAS host, user, and path.
         """
-        config = ConfigManager.read()
+        config = ConfigManager.read(mask_sensitive=False)
         return {
-            "host": config.get("NAS_HOST", "").replace("***", ""),  # Config may be masked
-            "user": config.get("NAS_USER", "").replace("***", ""),
-            "path": config.get("NAS_PATH", "").replace("***", "")
+            "host": config.get("NAS_HOST", ""),
+            "user": config.get("NAS_USER", ""),
+            "path": config.get("NAS_PATH", "")
         }
 
     @staticmethod
