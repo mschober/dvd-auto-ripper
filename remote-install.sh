@@ -509,9 +509,64 @@ setup_ssh_keys() {
         print_info "Generating SSH key for dvd-web user..."
         sudo -u dvd-web ssh-keygen -t ed25519 -f "$web_key_file" -N "" -C "dvd-web@$(hostname)"
         print_info "✓ SSH key generated: $web_key_file"
-        print_info "  (For cluster archive transfers via dashboard)"
     else
         print_info "✓ SSH key already exists: $web_key_file"
+    fi
+
+    # Deploy dvd-web key to NAS (for dashboard rename-on-NAS)
+    # Read NAS config if available
+    local config_file="/etc/dvd-ripper.conf"
+    local nas_host="" nas_user=""
+    if [[ -f "$config_file" ]]; then
+        nas_host=$(grep -E "^NAS_HOST=" "$config_file" 2>/dev/null | cut -d'"' -f2 || true)
+        nas_user=$(grep -E "^NAS_USER=" "$config_file" 2>/dev/null | cut -d'"' -f2 || true)
+    fi
+
+    if [[ -n "$nas_host" && -n "$nas_user" ]]; then
+        # Accept NAS host key if not already known
+        if ! sudo -u dvd-web ssh-keygen -F "$nas_host" -f "$web_ssh_dir/known_hosts" &>/dev/null; then
+            print_info "Adding $nas_host to dvd-web known_hosts..."
+            sudo -u dvd-web ssh-keyscan -H "$nas_host" >> "$web_ssh_dir/known_hosts" 2>/dev/null || true
+            chown dvd-web:dvd-ripper "$web_ssh_dir/known_hosts"
+            print_info "✓ Added NAS host key"
+        fi
+
+        # Deploy public key to NAS via dvd-transfer (which already has access)
+        local transfer_key="/var/lib/dvd-transfer/.ssh/id_ed25519"
+        if [[ -f "$transfer_key" ]]; then
+            local web_pubkey
+            web_pubkey=$(cat "${web_key_file}.pub")
+            # Check if key is already deployed
+            if sudo -u dvd-transfer ssh -o BatchMode=yes -o ConnectTimeout=10 \
+                "${nas_user}@${nas_host}" "grep -qF '${web_pubkey}' ~/.ssh/authorized_keys 2>/dev/null" 2>/dev/null; then
+                print_info "✓ dvd-web key already deployed to NAS"
+            else
+                print_info "Deploying dvd-web public key to NAS..."
+                if sudo -u dvd-transfer ssh -o BatchMode=yes -o ConnectTimeout=10 \
+                    "${nas_user}@${nas_host}" "mkdir -p ~/.ssh && echo '${web_pubkey}' >> ~/.ssh/authorized_keys" 2>/dev/null; then
+                    print_info "✓ dvd-web key deployed to ${nas_user}@${nas_host}"
+                else
+                    print_warn "Could not deploy dvd-web key to NAS automatically"
+                    print_warn "Manually add this key to ${nas_user}@${nas_host}:~/.ssh/authorized_keys"
+                    print_warn "${web_pubkey}"
+                fi
+            fi
+
+            # Test connection
+            if sudo -u dvd-web ssh -o BatchMode=yes -o ConnectTimeout=10 \
+                "${nas_user}@${nas_host}" "echo ok" &>/dev/null; then
+                print_info "✓ dvd-web -> ${nas_user}@${nas_host} SSH connection verified"
+            else
+                print_warn "dvd-web SSH to NAS not working yet"
+                print_warn "Dashboard NAS rename will not work until resolved"
+            fi
+        else
+            print_warn "dvd-transfer key not found - cannot auto-deploy dvd-web key to NAS"
+            print_warn "Manually add ${web_key_file}.pub to ${nas_user}@${nas_host}:~/.ssh/authorized_keys"
+        fi
+    else
+        print_info "  NAS not configured yet - skipping dvd-web key deployment"
+        print_info "  Re-run installer after setting NAS_HOST/NAS_USER in config"
     fi
 }
 
