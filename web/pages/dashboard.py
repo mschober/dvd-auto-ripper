@@ -164,8 +164,6 @@ def issues_page():
     return render_template(
         "identify.html",
         active_page="issues",
-        pending=Identifier.get_pending_identification(),
-        audit_flags=Identifier.get_audit_flags(),
         version=get_pipeline_version(),
         dashboard_version=DASHBOARD_VERSION,
         github_url=GITHUB_URL,
