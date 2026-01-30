@@ -235,9 +235,10 @@ class Identifier:
         new_preview = old_preview
         new_nas = old_nas
 
-        # Rename local MKV if exists
+        # Rename local MKV/MP4 if exists
         if old_mkv and os.path.exists(old_mkv):
-            new_mkv_name = Identifier.generate_plex_filename(new_title, new_year, 'mkv')
+            mkv_ext = old_mkv.rsplit('.', 1)[-1] if '.' in old_mkv else 'mkv'
+            new_mkv_name = Identifier.generate_plex_filename(new_title, new_year, mkv_ext)
             new_mkv = os.path.join(STAGING_DIR, new_mkv_name)
             os.rename(old_mkv, new_mkv)
 
@@ -265,7 +266,8 @@ class Identifier:
         if state == "transferred" and old_nas:
             nas_config = Identifier.read_nas_config()
             if nas_config["host"] and nas_config["user"]:
-                new_nas_name = Identifier.generate_plex_filename(new_title, new_year, 'mkv')
+                nas_ext = old_nas.rsplit('.', 1)[-1] if '.' in old_nas else 'mkv'
+                new_nas_name = Identifier.generate_plex_filename(new_title, new_year, nas_ext)
                 nas_dir = os.path.dirname(old_nas)
                 new_nas = os.path.join(nas_dir, new_nas_name)
                 success, msg = Identifier.rename_remote_file(
