@@ -222,17 +222,20 @@ class Identifier:
             new_mkv = os.path.join(STAGING_DIR, new_mkv_name)
             os.rename(old_mkv, new_mkv)
 
-        # Rename ISO if exists (could be .iso or .iso.deletable)
-        if old_iso:
-            iso_deletable = old_iso + '.deletable'
-            if os.path.exists(iso_deletable):
-                new_iso_name = f"{new_sanitized}-{timestamp}.iso.deletable"
-                new_iso = os.path.join(STAGING_DIR, new_iso_name).replace('.deletable', '')
-                os.rename(iso_deletable, new_iso + '.deletable')
-            elif os.path.exists(old_iso):
-                new_iso_name = f"{new_sanitized}-{timestamp}.iso"
-                new_iso = os.path.join(STAGING_DIR, new_iso_name)
-                os.rename(old_iso, new_iso)
+        # Rename rip if exists (ISO file from ddrescue, or directory from dvdbackup)
+        if old_iso and os.path.exists(old_iso):
+            if os.path.isdir(old_iso):
+                # dvdbackup: directory with no extension
+                new_iso = os.path.join(STAGING_DIR, f"{new_sanitized}-{timestamp}")
+            else:
+                # ddrescue: .iso file
+                new_iso = os.path.join(STAGING_DIR, f"{new_sanitized}-{timestamp}.iso")
+            os.rename(old_iso, new_iso)
+
+            # Rename .archive-ready marker if it exists
+            old_marker = old_iso + ".archive-ready"
+            if os.path.exists(old_marker):
+                os.rename(old_marker, new_iso + ".archive-ready")
 
         # Rename preview if exists
         if old_preview and os.path.exists(old_preview):
