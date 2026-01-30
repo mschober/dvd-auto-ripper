@@ -9,7 +9,8 @@ function buildIdentifyCard(item) {
     cardCounter++;
     const idx = cardCounter;
     const meta = item.metadata;
-    const previewFile = meta.preview_path ? meta.preview_path.split('/').pop() : '';
+    const rawPreview = (meta.preview_path || '').trim();
+    const previewFile = rawPreview ? rawPreview.split('/').pop() : '';
     const displayTitle = (meta.title || '').replace(/_/g, ' ');
     const yearDisplay = meta.year ? ' (' + meta.year + ')' : '';
 

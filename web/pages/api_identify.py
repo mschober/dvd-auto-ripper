@@ -74,6 +74,27 @@ def api_identify_rename(state_file):
         return jsonify({"error": str(e)}), 500
 
 
+def _resolve_preview_path(filename):
+    """Resolve a preview filename to its actual path on disk.
+
+    Handles case mismatches between metadata and filesystem by falling
+    back to a case-insensitive search in STAGING_DIR.
+    """
+    # Try exact match first
+    path = os.path.join(STAGING_DIR, filename)
+    if os.path.exists(path):
+        return path
+    # Case-insensitive fallback
+    lower = filename.lower()
+    try:
+        for entry in os.listdir(STAGING_DIR):
+            if entry.lower() == lower:
+                return os.path.join(STAGING_DIR, entry)
+    except OSError:
+        pass
+    return None
+
+
 @api_identify_bp.route("/api/preview/<filename>")
 def api_serve_preview(filename):
     """API: Serve preview video file."""
@@ -81,8 +102,8 @@ def api_serve_preview(filename):
     if not filename.endswith('.preview.mp4'):
         return jsonify({"error": "Invalid preview file"}), 400
 
-    preview_path = os.path.join(STAGING_DIR, filename)
-    if not os.path.exists(preview_path):
+    preview_path = _resolve_preview_path(filename)
+    if not preview_path:
         return jsonify({"error": "Preview not found"}), 404
 
     return send_file(preview_path, mimetype='video/mp4')
@@ -95,13 +116,13 @@ def api_delete_preview(filename):
     if not filename.endswith('.preview.mp4'):
         return jsonify({"error": "Invalid preview file"}), 400
 
-    preview_path = os.path.join(STAGING_DIR, filename)
-    if not os.path.exists(preview_path):
+    preview_path = _resolve_preview_path(filename)
+    if not preview_path:
         return jsonify({"error": "Preview not found"}), 404
 
     try:
         os.remove(preview_path)
-        logger.info("Deleted preview: %s", filename)
+        logger.info("Deleted preview: %s", os.path.basename(preview_path))
         return jsonify({"status": "deleted"})
     except OSError as e:
         logger.error("Failed to delete preview %s: %s", filename, e)
