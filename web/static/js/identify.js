@@ -61,25 +61,39 @@ async function handleRename(form, event) {
 
 async function dismissPreview(btn) {
     const card = btn.closest('.identify-card');
+    const errorMsg = card.querySelector('.error-msg');
     if (!confirm('Are you sure? This will delete the preview from the server.')) {
         return;
     }
 
     // Extract preview filename from video source
     const source = card.querySelector('video source');
-    if (source) {
-        const src = source.getAttribute('src');
-        const filename = src.split('/').pop();
-        try {
-            await fetch('/api/preview/' + encodeURIComponent(filename), {
-                method: 'DELETE'
-            });
-        } catch (e) {
-            // Continue with card removal even if delete fails
-        }
+    if (!source) {
+        errorMsg.textContent = 'No preview file to delete';
+        errorMsg.style.display = 'block';
+        return;
     }
 
-    // Fade out and remove card
+    const src = source.getAttribute('src');
+    const filename = src.split('/').pop();
+    try {
+        const response = await fetch('/api/preview/' + encodeURIComponent(filename), {
+            method: 'DELETE'
+        });
+        const result = await response.json();
+
+        if (!response.ok) {
+            errorMsg.textContent = 'Delete failed: ' + (result.error || 'Unknown error');
+            errorMsg.style.display = 'block';
+            return;
+        }
+    } catch (e) {
+        errorMsg.textContent = 'Request failed: ' + e.message;
+        errorMsg.style.display = 'block';
+        return;
+    }
+
+    // Fade out and remove card only on success
     card.style.transition = 'opacity 0.3s';
     card.style.opacity = '0';
     card.style.pointerEvents = 'none';

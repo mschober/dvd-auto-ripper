@@ -121,6 +121,9 @@ generate_preview() {
         -movflags +faststart \
         -y "$preview_path" >> "$(get_stage_log_file)" 2>&1; then
 
+        # Make group-writable so dvd-web can delete via dashboard
+        chgrp dvd-ripper "$preview_path" 2>/dev/null || true
+        chmod 664 "$preview_path" 2>/dev/null || true
         local preview_size=$(stat -c%s "$preview_path" 2>/dev/null || echo "0")
         local preview_size_mb=$((preview_size / 1024 / 1024))
         log_info "[ENCODER] Preview generated: ${preview_size_mb}MB at $preview_path"

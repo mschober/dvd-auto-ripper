@@ -1,7 +1,10 @@
 """Identification API routes for the DVD ripper dashboard."""
+import logging
 import os
 import re
 from flask import Blueprint, jsonify, request, send_file
+
+logger = logging.getLogger(__name__)
 
 from helpers.pipeline import STAGING_DIR
 from helpers.identifier import Identifier, RENAMEABLE_STATES
@@ -98,6 +101,8 @@ def api_delete_preview(filename):
 
     try:
         os.remove(preview_path)
+        logger.info("Deleted preview: %s", filename)
         return jsonify({"status": "deleted"})
     except OSError as e:
+        logger.error("Failed to delete preview %s: %s", filename, e)
         return jsonify({"error": str(e)}), 500
