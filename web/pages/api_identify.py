@@ -1,7 +1,11 @@
 """Identification API routes for the DVD ripper dashboard."""
+import json
+import logging
 import os
 import re
 from flask import Blueprint, jsonify, request, send_file
+
+logger = logging.getLogger(__name__)
 
 from helpers.pipeline import STAGING_DIR
 from helpers.identifier import Identifier, RENAMEABLE_STATES
@@ -71,6 +75,27 @@ def api_identify_rename(state_file):
         return jsonify({"error": str(e)}), 500
 
 
+def _resolve_preview_path(filename):
+    """Resolve a preview filename to its actual path on disk.
+
+    Handles case mismatches between metadata and filesystem by falling
+    back to a case-insensitive search in STAGING_DIR.
+    """
+    # Try exact match first
+    path = os.path.join(STAGING_DIR, filename)
+    if os.path.exists(path):
+        return path
+    # Case-insensitive fallback
+    lower = filename.lower()
+    try:
+        for entry in os.listdir(STAGING_DIR):
+            if entry.lower() == lower:
+                return os.path.join(STAGING_DIR, entry)
+    except OSError:
+        pass
+    return None
+
+
 @api_identify_bp.route("/api/preview/<filename>")
 def api_serve_preview(filename):
     """API: Serve preview video file."""
@@ -78,8 +103,68 @@ def api_serve_preview(filename):
     if not filename.endswith('.preview.mp4'):
         return jsonify({"error": "Invalid preview file"}), 400
 
-    preview_path = os.path.join(STAGING_DIR, filename)
-    if not os.path.exists(preview_path):
+    preview_path = _resolve_preview_path(filename)
+    if not preview_path:
         return jsonify({"error": "Preview not found"}), 404
 
     return send_file(preview_path, mimetype='video/mp4')
+
+
+@api_identify_bp.route("/api/preview/<filename>", methods=["DELETE"])
+def api_delete_preview(filename):
+    """API: Delete a preview video file."""
+    # Security: only allow .preview.mp4 files
+    if not filename.endswith('.preview.mp4'):
+        return jsonify({"error": "Invalid preview file"}), 400
+
+    preview_path = _resolve_preview_path(filename)
+    if not preview_path:
+        return jsonify({"error": "Preview not found"}), 404
+
+    try:
+        os.remove(preview_path)
+        logger.info("Deleted preview: %s", os.path.basename(preview_path))
+        return jsonify({"status": "deleted"})
+    except OSError as e:
+        logger.error("Failed to delete preview %s: %s", filename, e)
+        return jsonify({"error": str(e)}), 500
+
+
+@api_identify_bp.route("/api/identify/<path:state_file>/dismiss", methods=["POST"])
+def api_identify_dismiss(state_file):
+    """API: Dismiss an item from the identify page.
+
+    Clears needs_identification and removes the preview file so the
+    item no longer appears on the identify page.
+    """
+    full_path = os.path.join(STAGING_DIR, state_file)
+    if not os.path.exists(full_path):
+        return jsonify({"error": "Item not found"}), 404
+
+    try:
+        with open(full_path, 'r') as f:
+            metadata = json.load(f)
+    except (json.JSONDecodeError, IOError) as e:
+        return jsonify({"error": str(e)}), 500
+
+    # Delete preview file if it exists
+    preview_path = metadata.get('preview_path', '').strip()
+    if preview_path and os.path.isfile(preview_path):
+        try:
+            os.remove(preview_path)
+            logger.info("Deleted preview: %s", os.path.basename(preview_path))
+        except OSError as e:
+            logger.error("Failed to delete preview %s: %s", preview_path, e)
+            return jsonify({"error": f"Could not delete preview: {e}"}), 500
+
+    # Clear identification flag and preview path
+    metadata['needs_identification'] = False
+    metadata['preview_path'] = ''
+    try:
+        with open(full_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        logger.info("Dismissed: %s", state_file)
+        return jsonify({"status": "dismissed"})
+    except IOError as e:
+        logger.error("Failed to update state file %s: %s", state_file, e)
+        return jsonify({"error": str(e)}), 500

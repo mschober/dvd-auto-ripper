@@ -71,10 +71,14 @@ class Identifier:
 
     @staticmethod
     def get_pending_identification():
-        """Get items that need identification (generic names in renameable states).
+        """Get items that need identification or year in renameable states.
+
+        Shows any item that has a preview file and is missing a valid
+        4-digit year, plus any item explicitly flagged via
+        needs_identification.
 
         Returns:
-            list: Items needing identification sorted by modification time.
+            list: Items needing attention sorted by modification time.
         """
         pending = []
         for state in RENAMEABLE_STATES:
@@ -87,10 +91,14 @@ class Identifier:
                     continue
 
                 title = metadata.get('title', '')
-                # Check explicit flag first, fall back to pattern matching
-                needs_id = metadata.get('needs_identification', Identifier.is_generic_title(title))
+                year = metadata.get('year', '').strip()
+                has_year = bool(re.match(r'^\d{4}$', year))
+                preview_path = metadata.get('preview_path', '').strip()
+                has_preview = bool(preview_path) and os.path.isfile(preview_path)
 
-                if needs_id:
+                needs_id = metadata.get('needs_identification', Identifier.is_generic_title(title))
+                # Show if explicitly flagged, or has a preview but missing a year
+                if needs_id or (has_preview and not has_year):
                     pending.append({
                         "state_file": os.path.basename(state_file),
                         "state": state,
@@ -144,15 +152,17 @@ class Identifier:
         Returns:
             dict: NAS host, user, and path.
         """
-        config = ConfigManager.read()
+        config = ConfigManager.read(mask_sensitive=False)
         return {
-            "host": config.get("NAS_HOST", "").replace("***", ""),  # Config may be masked
-            "user": config.get("NAS_USER", "").replace("***", ""),
-            "path": config.get("NAS_PATH", "").replace("***", "")
+            "host": config.get("NAS_HOST", ""),
+            "user": config.get("NAS_USER", ""),
+            "path": config.get("NAS_PATH", ""),
+            "ssh_identity": config.get("NAS_SSH_IDENTITY", "")
         }
 
     @staticmethod
-    def rename_remote_file(nas_host, nas_user, old_path, new_path):
+    def rename_remote_file(nas_host, nas_user, old_path, new_path,
+                           ssh_identity=""):
         """Rename a file on the NAS via SSH.
 
         Args:
@@ -160,12 +170,21 @@ class Identifier:
             nas_user: SSH username.
             old_path: Current file path on NAS.
             new_path: New file path on NAS.
+            ssh_identity: Optional path to SSH private key.
 
         Returns:
             tuple: (success, message)
         """
         try:
-            cmd = ["ssh", f"{nas_user}@{nas_host}", f'mv "{old_path}" "{new_path}"']
+            cmd = ["ssh"]
+            if ssh_identity and os.path.isfile(ssh_identity):
+                cmd += ["-i", ssh_identity]
+                # Use dvd-transfer's known_hosts alongside the key
+                key_dir = os.path.dirname(ssh_identity)
+                known_hosts = os.path.join(key_dir, "known_hosts")
+                if os.path.isfile(known_hosts):
+                    cmd += ["-o", f"UserKnownHostsFile={known_hosts}"]
+            cmd += [f"{nas_user}@{nas_host}", f'mv "{old_path}" "{new_path}"']
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             return result.returncode == 0, result.stderr.strip() or "OK"
         except Exception as e:
@@ -222,17 +241,20 @@ class Identifier:
             new_mkv = os.path.join(STAGING_DIR, new_mkv_name)
             os.rename(old_mkv, new_mkv)
 
-        # Rename ISO if exists (could be .iso or .iso.deletable)
-        if old_iso:
-            iso_deletable = old_iso + '.deletable'
-            if os.path.exists(iso_deletable):
-                new_iso_name = f"{new_sanitized}-{timestamp}.iso.deletable"
-                new_iso = os.path.join(STAGING_DIR, new_iso_name).replace('.deletable', '')
-                os.rename(iso_deletable, new_iso + '.deletable')
-            elif os.path.exists(old_iso):
-                new_iso_name = f"{new_sanitized}-{timestamp}.iso"
-                new_iso = os.path.join(STAGING_DIR, new_iso_name)
-                os.rename(old_iso, new_iso)
+        # Rename rip if exists (ISO file from ddrescue, or directory from dvdbackup)
+        if old_iso and os.path.exists(old_iso):
+            if os.path.isdir(old_iso):
+                # dvdbackup: directory with no extension
+                new_iso = os.path.join(STAGING_DIR, f"{new_sanitized}-{timestamp}")
+            else:
+                # ddrescue: .iso file
+                new_iso = os.path.join(STAGING_DIR, f"{new_sanitized}-{timestamp}.iso")
+            os.rename(old_iso, new_iso)
+
+            # Rename .archive-ready marker if it exists
+            old_marker = old_iso + ".archive-ready"
+            if os.path.exists(old_marker):
+                os.rename(old_marker, new_iso + ".archive-ready")
 
         # Rename preview if exists
         if old_preview and os.path.exists(old_preview):
@@ -247,7 +269,8 @@ class Identifier:
                 nas_dir = os.path.dirname(old_nas)
                 new_nas = os.path.join(nas_dir, new_nas_name)
                 success, msg = Identifier.rename_remote_file(
-                    nas_config["host"], nas_config["user"], old_nas, new_nas
+                    nas_config["host"], nas_config["user"], old_nas, new_nas,
+                    ssh_identity=nas_config.get("ssh_identity", "")
                 )
                 if not success:
                     raise Exception(f"Failed to rename on NAS: {msg}")

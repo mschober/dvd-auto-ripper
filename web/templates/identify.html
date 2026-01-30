@@ -13,11 +13,30 @@
         gap: 20px;
     }
     .identify-card {
+        position: relative;
         background: white;
         border-radius: 8px;
         padding: 16px;
         box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     }
+    .btn-dismiss-card {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        z-index: 10;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        border: none;
+        background: #e5e7eb;
+        color: #374151;
+        font-size: 16px;
+        line-height: 28px;
+        text-align: center;
+        cursor: pointer;
+        padding: 0;
+    }
+    .btn-dismiss-card:hover { background: #d1d5db; }
     .preview-container {
         position: relative;
         background: #000;
@@ -162,98 +181,10 @@
 {% block content %}
 <p class="subtitle">Items needing attention: generic names to identify, audit flags to review.</p>
 
-{% if pending %}
-<h2 style="margin: 0 0 16px 0; color: #f59e0b;">Needs Identification</h2>
-<p style="color: #666; margin-bottom: 16px;">These items have generic names. Watch the preview to identify each movie.</p>
-<div class="identify-grid">
-    {% for item in pending %}
-    <div class="identify-card" data-state-file="{{ item.state_file }}">
-        <div class="success-msg"></div>
-        <div class="error-msg"></div>
+<div id="identify-section"></div>
 
-        <div class="preview-container">
-            {% if item.metadata.preview_path %}
-            <video class="preview-video" controls preload="metadata">
-                <source src="/api/preview/{{ item.metadata.preview_path.split('/')[-1] }}" type="video/mp4">
-                Your browser does not support video playback.
-            </video>
-            {% else %}
-            <div class="no-preview">
-                No preview available<br>
-                <small>Preview will be generated during encoding</small>
-            </div>
-            {% endif %}
-        </div>
-
-        <div class="current-name">
-            Current: {{ item.metadata.title | replace('_', ' ') }}
-            {% if item.metadata.year %} ({{ item.metadata.year }}){% endif %}
-        </div>
-
-        <form class="rename-form" onsubmit="return handleRename(this, event)">
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="title-{{ loop.index }}">Movie Title</label>
-                    <input type="text" id="title-{{ loop.index }}" name="title"
-                           placeholder="The Matrix" required>
-                </div>
-                <div class="form-group">
-                    <label for="year-{{ loop.index }}">Year</label>
-                    <input type="text" id="year-{{ loop.index }}" name="year"
-                           placeholder="1999" pattern="[0-9]{4}" maxlength="4">
-                </div>
-            </div>
-            <button type="submit" class="btn btn-primary" style="width: 100%;">Rename &amp; Identify</button>
-        </form>
-
-        <div class="state-info">
-            <span class="status-badge state-{{ item.state }}">{{ item.state }}</span>
-            {% if item.metadata.nas_path %}
-            <span title="{{ item.metadata.nas_path }}">On NAS</span>
-            {% endif %}
-        </div>
-    </div>
-    {% endfor %}
-</div>
-{% else %}
-{% if not audit_flags %}
-<div class="empty-state">
-    <h2>All Clear!</h2>
-    <p>No issues found. All your DVDs have proper names and passed audit.</p>
-    <p><a href="/">Return to Dashboard</a></p>
-</div>
-{% endif %}
-{% endif %}
-
-{% if audit_flags %}
-<div class="audit-section">
-    <h2>Audit Flags</h2>
-    <p class="subtitle">These videos were flagged by the hourly audit for potential issues.</p>
-    {% for flag in audit_flags %}
-    <div class="audit-card" data-title="{{ flag.title }}">
-        <div class="audit-title">{{ flag.title }}</div>
-        <div class="audit-issues">
-            {% if 'gibberish' in flag.issues %}
-            <span class="audit-issue issue-gibberish">Suspicious Title</span>
-            {% endif %}
-            {% if 'small' in flag.issues %}
-            <span class="audit-issue issue-small">Small File ({{ flag.size_mb }}MB)</span>
-            {% endif %}
-            {% if 'missing' in flag.issues %}
-            <span class="audit-issue issue-missing">Missing Archive</span>
-            {% endif %}
-        </div>
-        <div class="audit-meta">
-            Flagged: {{ flag.flagged_at[:19] if flag.flagged_at else 'Unknown' }}
-            {% if flag.hostname %} | Host: {{ flag.hostname }}{% endif %}
-        </div>
-        <button class="btn btn-dismiss" onclick="dismissAuditFlag('{{ flag.title }}', this)">
-            Dismiss Flag
-        </button>
-    </div>
-    {% endfor %}
-</div>
-{% endif %}
+<div id="audit-section"></div>
+<p class="auto-refresh" style="font-size: 11px; color: #64748b; margin-top: 16px;">Auto-refreshes every 30 seconds</p>
 {% endblock %}
 
 {% block scripts %}
