@@ -156,11 +156,13 @@ class Identifier:
         return {
             "host": config.get("NAS_HOST", ""),
             "user": config.get("NAS_USER", ""),
-            "path": config.get("NAS_PATH", "")
+            "path": config.get("NAS_PATH", ""),
+            "ssh_identity": config.get("NAS_SSH_IDENTITY", "")
         }
 
     @staticmethod
-    def rename_remote_file(nas_host, nas_user, old_path, new_path):
+    def rename_remote_file(nas_host, nas_user, old_path, new_path,
+                           ssh_identity=""):
         """Rename a file on the NAS via SSH.
 
         Args:
@@ -168,12 +170,21 @@ class Identifier:
             nas_user: SSH username.
             old_path: Current file path on NAS.
             new_path: New file path on NAS.
+            ssh_identity: Optional path to SSH private key.
 
         Returns:
             tuple: (success, message)
         """
         try:
-            cmd = ["ssh", f"{nas_user}@{nas_host}", f'mv "{old_path}" "{new_path}"']
+            cmd = ["ssh"]
+            if ssh_identity and os.path.isfile(ssh_identity):
+                cmd += ["-i", ssh_identity]
+                # Use dvd-transfer's known_hosts alongside the key
+                key_dir = os.path.dirname(ssh_identity)
+                known_hosts = os.path.join(key_dir, "known_hosts")
+                if os.path.isfile(known_hosts):
+                    cmd += ["-o", f"UserKnownHostsFile={known_hosts}"]
+            cmd += [f"{nas_user}@{nas_host}", f'mv "{old_path}" "{new_path}"']
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             return result.returncode == 0, result.stderr.strip() or "OK"
         except Exception as e:
@@ -258,7 +269,8 @@ class Identifier:
                 nas_dir = os.path.dirname(old_nas)
                 new_nas = os.path.join(nas_dir, new_nas_name)
                 success, msg = Identifier.rename_remote_file(
-                    nas_config["host"], nas_config["user"], old_nas, new_nas
+                    nas_config["host"], nas_config["user"], old_nas, new_nas,
+                    ssh_identity=nas_config.get("ssh_identity", "")
                 )
                 if not success:
                     raise Exception(f"Failed to rename on NAS: {msg}")
