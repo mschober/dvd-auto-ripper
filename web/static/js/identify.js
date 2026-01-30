@@ -41,7 +41,7 @@ function buildIdentifyCard(item) {
                 <div class="form-group">
                     <label for="title-${idx}">Movie Title</label>
                     <input type="text" id="title-${idx}" name="title"
-                           placeholder="The Matrix" required>
+                           value="${displayTitle}" required>
                 </div>
                 <div class="form-group">
                     <label for="year-${idx}">Year</label>
